@@ -8,13 +8,17 @@
 
 ## 主要特性
 
-- 完整的服务生命周期管理（安装、卸载、启动、停止、重启）
+- 完整的服务生命周期管理（安装、卸载、启动、停止、重启、状态查询）
 - 多语言支持（内置中文和英文）
-- 丰富的命令行参数系统
+- 丰富的命令行参数系统，支持参数验证
 - 运行时配置管理
 - 详细的构建信息支持
-- 彩色控制台输出
-- Windows 服务支持
+- 可自定义主题的彩色控制台输出
+- 跨平台服务支持（Windows/Linux/macOS）
+- 自定义命令支持
+- 参数验证和枚举值支持
+- 并发参数处理
+- 调试模式支持
 
 ## 安装
 
@@ -24,13 +28,13 @@ go get github.com/darkit/zcli
 
 ## 环境要求
 
-- Go 1.16 或更高版本
+- Go 1.21.5 或更高版本
 - Windows、Linux 或 macOS 操作系统
 
 ## 依赖项
 
-- github.com/kardianos/service
-- github.com/fatih/color
+- github.com/kardianos/service v1.2.2
+- github.com/fatih/color v1.18.0
 
 ## 快速开始
 
@@ -38,23 +42,84 @@ go get github.com/darkit/zcli
 package main
 
 import (
-    "log"
+    "fmt"
+    "log/slog"
+    "time"
     "github.com/darkit/zcli"
 )
 
 func main() {
+    // 创建构建信息
+    buildInfo := zcli.NewBuildInfo().
+        SetDebug(true).
+        SetVersion("1.0.0").
+        SetBuildTime(time.Now())
+
+    // 创建服务
     svc, err := zcli.New(&zcli.Options{
         Name:        "myapp",
         DisplayName: "我的应用",
-        Description: "这是我的应用服务",
+        Description: "这是一个示例应用服务",
         Version:     "1.0.0",
+        Language:    "zh",
+        BuildInfo:   buildInfo,
+        Run: func() error {
+            slog.Info("服务正在运行...")
+            return nil
+        },
+        Stop: func() error {
+            slog.Info("服务正在停止...")
+            return nil
+        },
     })
     if err != nil {
-        log.Fatal(err)
+        slog.Error("创建服务失败", "error", err)
+        return
     }
 
+    // 添加参数
+    pm := svc.ParamManager()
+    
+    // 添加配置文件参数
+    pm.AddParam(&zcli.Parameter{
+        Name:        "config",
+        Short:       "c",
+        Long:        "config", 
+        Description: "配置文件路径",
+        Required:    true,
+        Type:        "string",
+    })
+
+    // 添加端口参数（带验证）
+    pm.AddParam(&zcli.Parameter{
+        Name:        "port",
+        Short:       "p",
+        Long:        "port",
+        Description: "服务端口",
+        Default:     "8080",
+        Type:        "string",
+        Validate: func(val string) error {
+            if val == "0" {
+                return fmt.Errorf("端口不能为0")
+            }
+            return nil
+        },
+    })
+
+    // 添加模式参数（带枚举值）
+    pm.AddParam(&zcli.Parameter{
+        Name:        "mode",
+        Short:       "m",
+        Long:        "mode",
+        Description: "运行模式",
+        Default:     "prod",
+        EnumValues:  []string{"dev", "test", "prod"},
+        Type:        "string",
+    })
+
+    // 运行服务
     if err := svc.Run(); err != nil {
-        log.Fatal(err)
+        slog.Error("服务运行失败", "error", err)
     }
 }
 ```
@@ -65,7 +130,10 @@ func main() {
 # 显示帮助信息
 ./myapp -h
 
-# 安装服务
+# 显示版本信息
+./myapp -v
+
+# 安装并启动服务
 ./myapp install
 
 # 启动服务
@@ -74,113 +142,141 @@ func main() {
 # 停止服务
 ./myapp stop
 
-# 显示状态
+# 重启服务
+./myapp restart
+
+# 显示服务状态
 ./myapp status
 
 # 卸载服务
 ./myapp uninstall
 
-# 使用中文
-./myapp install --lang zh
-
 # 使用自定义参数运行
-./myapp --port 9090 --mode dev
+./myapp --port 9090 --mode dev --config config.toml
+
+# 使用中文
+./myapp --lang zh
 ```
 
 ## 参数系统
 
-该库提供了灵活的参数管理系统：
+该库提供了完整的参数管理系统：
 
 ```go
 // 添加必需参数
-svc.ParamManager().AddParam(&zcli.Parameter{
+pm.AddParam(&zcli.Parameter{
     Name:        "config",
     Short:       "c",
     Long:        "config",
     Description: "配置文件路径",
     Required:    true,
+    Type:        "string",
+})
+
+// 添加带验证的参数
+pm.AddParam(&zcli.Parameter{
+    Name:        "workers",
+    Short:       "w",
+    Long:        "workers",
+    Description: "工作线程数",
+    Default:     "5",
+    Type:        "string",
+    Validate: func(val string) error {
+        if val == "0" {
+            return fmt.Errorf("工作线程数不能为0")
+        }
+        return nil
+    },
 })
 
 // 添加枚举参数
-svc.ParamManager().AddParam(&zcli.Parameter{
+pm.AddParam(&zcli.Parameter{
     Name:        "mode",
     Short:       "m",
     Long:        "mode",
     Description: "运行模式",
     Default:     "prod",
     EnumValues:  []string{"dev", "test", "prod"},
-})
-```
-
-## 多语言支持
-
-内置中英文支持，可以轻松添加更多语言：
-
-```go
-// 添加新语言
-svc.AddLanguage("fr", zcli.Messages{
-    Install:   "Installer le service",
-    Uninstall: "Désinstaller le service",
-    Start:     "Démarrer le service",
-    Stop:      "Arrêter le service",
-    // ...
+    Type:        "string",
 })
 
-// 切换语言
-svc.SetLanguage("fr")
+// 获取参数值
+port := pm.GetString("port")
+workers := pm.GetInt("workers")
+isDebug := pm.GetBool("debug")
 ```
 
 ## 构建信息
 
-支持详细的构建信息：
+支持详细的构建信息，配合构建脚本使用：
 
-```go
-svc, err := zcli.New(&zcli.Options{
-    Name:    "myapp",
-    Version: "1.0.0",
-    BuildInfo: zcli.NewBuildInfo().
-        SetVersion("1.0.0").
-        SetBuildTime(time.Now()).
-        SetDebug(true),
-})
+```bash
+#!/bin/bash
+VERSION="1.0.0"
+GIT_COMMIT=$(git rev-parse HEAD)
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+go build \
+    -ldflags "-X main.version=${VERSION} \
+              -X buildInfo.buildTime=${BUILD_TIME} \
+              -X buildInfo.gitCommit=${GIT_COMMIT} \
+              -X buildInfo.gitBranch=${GIT_BRANCH} \
+              -X buildInfo.gitTag=${GIT_TAG}" \
+    -o myapp
 ```
 
-## 运行时配置
+## 自定义命令
 
-所有参数和设置都在内存中管理：
+支持添加自定义命令：
 
 ```go
-// 设置自定义配置值
-svc.SetConfigValue("custom_key", "custom_value")
+pm.AddCommand("custom", "自定义命令描述", func() {
+    // 自定义命令逻辑
+    return nil
+}, false)
+```
+
+## 配置管理
+
+运行时配置管理：
+
+```go
+// 设置配置值
+svc.SetConfigValue("lastStartTime", time.Now().Unix())
 
 // 获取配置值
-value, exists := svc.GetConfigValue("custom_key")
+value, exists := svc.GetConfigValue("lastStartTime")
 
 // 删除配置值
-svc.DeleteConfigValue("custom_key")
+svc.DeleteConfigValue("lastStartTime")
+
+// 检查配置是否存在
+exists := svc.HasConfigValue("lastStartTime")
+
+// 获取所有配置键
+keys := svc.GetConfigKeys()
 ```
 
-## 服务事件
+## 调试模式
 
-支持服务生命周期事件：
+支持调试模式：
 
 ```go
-svc, err := zcli.New(&zcli.Options{
-    Name: "myapp",
-    Run: func() error {
-        // 服务运行逻辑
-        return nil
-    },
-    Stop: func() error {
-        // 服务停止逻辑
-        return nil
-    },
-})
+// 启用调试模式
+svc.EnableDebug()
+
+// 禁用调试模式
+svc.DisableDebug()
+
+// 检查调试状态
+isDebug := svc.IsDebug()
 ```
 
-## 高级用法
+## 示例
 
-查看 `examples` 目录获取更多高级用法示例。
+查看 `examples` 目录获取完整的工作示例。
 
 ## 许可证
 

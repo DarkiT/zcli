@@ -149,7 +149,6 @@ type Service struct {
 	config   *Config
 	colors   *ColorScheme
 	status   atomic.Value
-	commands sync.Map // 存储自定义命令
 }
 
 // Messages 多语言消息
@@ -479,7 +478,7 @@ func (s *Service) showHelp() {
 	}
 
 	// 显示自定义命令
-	s.commands.Range(func(key, value interface{}) bool {
+	s.paramMgr.commands.Range(func(key, value interface{}) bool {
 		cmd := value.(*command)
 		if !cmd.Hidden {
 			buf.WriteString(s.colors.Command.Sprintf("  %-20s%s\n", cmd.Name, cmd.Description))
@@ -511,7 +510,7 @@ func (s *Service) handleCommand(cmd string) error {
 	cmdlist = append(cmdlist, "status")
 
 	//添加自定义命令
-	s.commands.Range(func(key, value interface{}) bool {
+	s.paramMgr.commands.Range(func(key, value interface{}) bool {
 		cmdlist = append(cmdlist, key.(string))
 		return true
 	})
@@ -574,12 +573,10 @@ func (s *Service) handleCommand(cmd string) error {
 
 	default:
 		// 处理自定义命令
-		if cmdValue, exists := s.commands.Load(cmd); exists {
+		if cmdValue, exists := s.paramMgr.commands.Load(cmd); exists {
 			cmds := cmdValue.(*command)
 			if cmds.Run != nil {
-				if err := cmds.Run(); err != nil {
-					return err
-				}
+				cmds.Run()
 				return nil
 			}
 			return fmt.Errorf("command %s has no Run function defined", cmds.Name)
@@ -852,22 +849,4 @@ func isColorSupported() bool {
 	}
 
 	return false
-}
-
-// command 定义命令结构
-type command struct {
-	Name        string       // 命令名称
-	Description string       // 命令描述
-	Hidden      bool         // 是否在帮助中隐藏
-	Run         func() error // 子命令启动回调函数。
-}
-
-// AddCommand 添加自定义命令
-func (s *Service) AddCommand(name, description string, run func() error, hidden bool) {
-	s.commands.Store(name, &command{
-		Name:        name,
-		Description: description,
-		Hidden:      hidden,
-		Run:         run,
-	})
 }

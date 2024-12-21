@@ -39,6 +39,15 @@ type ParamManager struct {
 	values     sync.Map     // 存储参数值
 	paramOrder atomic.Value // 存储参数顺序
 	parsed     atomic.Bool  // 解析状态标志
+	commands   sync.Map     // 存储自定义命令
+}
+
+// command 定义命令结构
+type command struct {
+	Name        string // 命令名称
+	Description string // 命令描述
+	Hidden      bool   // 是否在帮助中隐藏
+	Run         func() // 子命令启动回调函数。
 }
 
 // NewParamManager 创建参数管理器
@@ -46,6 +55,16 @@ func NewParamManager() *ParamManager {
 	pm := &ParamManager{}
 	pm.paramOrder.Store(make([]string, 0, 10))
 	return pm
+}
+
+// AddCommand 添加自定义命令
+func (pm *ParamManager) AddCommand(name, description string, run func(), hidden bool) {
+	pm.commands.Store(name, &command{
+		Name:        name,
+		Description: description,
+		Hidden:      hidden,
+		Run:         run,
+	})
 }
 
 // AddParam 添加参数
