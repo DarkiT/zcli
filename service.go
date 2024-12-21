@@ -143,7 +143,8 @@ type Options struct {
 type Service struct {
 	opts     *Options
 	svc      service.Service
-	msgs     sync.Map
+	msgs     map[string]Messages
+	mu       sync.RWMutex
 	isWin    bool
 	paramMgr *manager
 	colors   *ColorScheme
@@ -228,12 +229,15 @@ func New(opts *Options) (*Service, error) {
 		isWin:    runtime.GOOS == "windows",
 		paramMgr: NewParamManager(),
 		colors:   colorPool.Get().(*ColorScheme),
+		msgs:     make(map[string]Messages),
 	}
 
 	// 4. 初始化消息映射
+	s.mu.Lock()
 	for lang, msgs := range defaultMessages {
-		s.msgs.Store(lang, msgs)
+		s.msgs[lang] = msgs
 	}
+	s.mu.Unlock()
 
 	// 5. 设置颜色支持
 	if opts.NoColor || (s.isWin && !isColorSupported()) {
@@ -317,10 +321,9 @@ func (s *Service) Run() error {
 	paramValues := make(map[string]*string)
 
 	// 4. 注册自定义参数到 FlagSet
+	s.paramMgr.mu.RLock()
 	registeredFlags := make(map[string]bool)
-	s.paramMgr.params.Range(func(key, value interface{}) bool {
-		param := value.(*Parameter)
-
+	for _, param := range s.paramMgr.params {
 		// 为每个参数创建一个值存储
 		paramValue := new(string)
 		*paramValue = param.Default
@@ -337,9 +340,8 @@ func (s *Service) Run() error {
 			fs.StringVar(paramValue, param.Short, param.Default, param.Description)
 			registeredFlags[param.Short] = true
 		}
-
-		return true
-	})
+	}
+	s.paramMgr.mu.RUnlock()
 
 	fs.Usage = s.showHelp
 
@@ -349,19 +351,13 @@ func (s *Service) Run() error {
 	}
 
 	// 6. 从命令行参数更新值到 ParamManager
-	s.paramMgr.params.Range(func(key, value interface{}) bool {
-		param := value.(*Parameter)
-		if paramValue, ok := paramValues[param.Name]; ok {
-			// 存储参数值
-			s.paramMgr.values.Store(param.Name, *paramValue)
-
-			// 调试输出
-			//if s.IsDebug() {
-			//	fmt.Printf("Setting parameter %s = %s\n", param.Name, *paramValue)
-			//}
+	s.paramMgr.mu.Lock()
+	for name, paramValue := range paramValues {
+		if param, ok := s.paramMgr.params[name]; ok {
+			s.paramMgr.values[param.Name] = *paramValue
 		}
-		return true
-	})
+	}
+	s.paramMgr.mu.Unlock()
 
 	switch {
 	case help:
@@ -395,17 +391,19 @@ func (s *Service) showVersion() {
 
 // getMessage 获取消息
 func (s *Service) getMessage() Messages {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	lang := s.opts.Language
 	if lang == "" {
 		lang = "en"
 	}
 
-	if msgs, ok := s.msgs.Load(lang); ok {
-		return msgs.(Messages)
+	if msgs, ok := s.msgs[lang]; ok {
+		return msgs
 	}
 
-	msgs, _ := s.msgs.Load("en")
-	return msgs.(Messages)
+	return s.msgs["en"]
 }
 
 // showHelp 显示帮助信息
@@ -432,7 +430,10 @@ func (s *Service) showHelp() {
 	buf.WriteString(s.colors.Option.Sprintf("  %-20s%s\n", "-h, --help", msgs.Help))
 	buf.WriteString(s.colors.Option.Sprintf("  %-20s%s\n", "-v, --version", msgs.Version))
 
-	for _, p := range s.paramMgr.GetAllParams() {
+	// 显示所有参数
+	s.paramMgr.mu.RLock()
+	for _, name := range s.paramMgr.paramOrder {
+		p := s.paramMgr.params[name]
 		flags := make([]string, 0, 2)
 		if p.Short != "" {
 			flags = append(flags, "-"+strings.TrimPrefix(p.Short, "-"))
@@ -447,6 +448,7 @@ func (s *Service) showHelp() {
 			map[bool]string{true: fmt.Sprintf(" (%s)", msgs.Required), false: ""}[p.Required],
 			map[bool]string{true: fmt.Sprintf(" (%s: %s)", msgs.Default, p.Default), false: ""}[p.Default != ""]))
 	}
+	s.paramMgr.mu.RUnlock()
 	buf.WriteString("\n")
 
 	// 命令部分
@@ -468,13 +470,13 @@ func (s *Service) showHelp() {
 	}
 
 	// 显示自定义命令
-	s.paramMgr.commands.Range(func(key, value interface{}) bool {
-		cmd := value.(*command)
+	s.paramMgr.mu.RLock()
+	for _, cmd := range s.paramMgr.commands {
 		if !cmd.Hidden {
 			buf.WriteString(s.colors.Command.Sprintf("  %-20s%s\n", cmd.Name, cmd.Description))
 		}
-		return true
-	})
+	}
+	s.paramMgr.mu.RUnlock()
 
 	buf.WriteString("\n")
 
@@ -500,10 +502,11 @@ func (s *Service) handleCommand(cmd string) error {
 	cmdlist = append(cmdlist, "status")
 
 	// 添加自定义命令
-	s.paramMgr.commands.Range(func(key, value interface{}) bool {
-		cmdlist = append(cmdlist, key.(string))
-		return true
-	})
+	s.paramMgr.mu.RLock()
+	for cmdName := range s.paramMgr.commands {
+		cmdlist = append(cmdlist, cmdName)
+	}
+	s.paramMgr.mu.RUnlock()
 
 	// 首先验证命令是否存在
 	validCmd := false
@@ -563,14 +566,16 @@ func (s *Service) handleCommand(cmd string) error {
 
 	default:
 		// 处理自定义命令
-		if cmdValue, exists := s.paramMgr.commands.Load(cmd); exists {
-			cmds := cmdValue.(*command)
-			if cmds.Run != nil {
-				cmds.Run()
+		s.paramMgr.mu.RLock()
+		if cmd, exists := s.paramMgr.commands[cmd]; exists {
+			s.paramMgr.mu.RUnlock()
+			if cmd.Run != nil {
+				cmd.Run()
 				return nil
 			}
-			return fmt.Errorf("command %s has no Run function defined", cmds.Name)
+			return fmt.Errorf("command %s has no Run function defined", cmd.Name)
 		}
+		s.paramMgr.mu.RUnlock()
 	}
 
 	return nil
@@ -610,12 +615,14 @@ func (s *Service) ParamManager() *manager {
 
 // AddLanguage 添加新的语言支持
 func (s *Service) AddLanguage(lang string, msgs Messages) {
-	s.msgs.Store(lang, msgs)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msgs[lang] = msgs
 }
 
 // SetLanguage 设置当前语言
 func (s *Service) SetLanguage(lang string) bool {
-	if _, ok := s.msgs.Load(lang); !ok {
+	if _, ok := s.msgs[lang]; !ok {
 		return false
 	}
 	s.opts.Language = lang

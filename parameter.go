@@ -35,11 +35,12 @@ const (
 
 // manager 参数管理器
 type manager struct {
-	params     sync.Map     // 存储参数定义
-	values     sync.Map     // 存储参数值
-	paramOrder atomic.Value // 存储参数顺序
-	parsed     atomic.Bool  // 解析状态标志
-	commands   sync.Map     // 存储自定义命令
+	mu         sync.RWMutex          // 保护 maps 的互斥锁
+	params     map[string]*Parameter // 存储参数定义
+	commands   map[string]*command   // 存储自定义命令
+	values     map[string]string     // 存储参数值
+	paramOrder []string              // 存储参数顺序
+	parsed     bool                  // 解析状态标志
 }
 
 // command 定义命令结构
@@ -52,29 +53,38 @@ type command struct {
 
 // NewParamManager 创建参数管理器
 func NewParamManager() *manager {
-	pm := &manager{}
-	pm.paramOrder.Store(make([]string, 0))
-	return pm
+	return &manager{
+		params:     make(map[string]*Parameter),
+		commands:   make(map[string]*command),
+		values:     make(map[string]string),
+		paramOrder: make([]string, 0),
+	}
 }
 
 // AddCommand 添加自定义命令
 func (pm *manager) AddCommand(name, description string, run func(), hidden bool) {
-	pm.commands.Store(name, &command{
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	pm.commands[name] = &command{
 		Name:        name,
 		Description: description,
 		Hidden:      hidden,
 		Run:         run,
-	})
+	}
 }
 
 // AddParam 添加参数
 func (pm *manager) AddParam(p *Parameter) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
 	if p.Name == "" {
 		return fmt.Errorf("parameter name is required")
 	}
 
 	// 检查参数是否已存在
-	if _, exists := pm.params.Load(p.Name); exists {
+	if _, exists := pm.params[p.Name]; exists {
 		return fmt.Errorf("parameter %s already exists", p.Name)
 	}
 
@@ -107,16 +117,12 @@ func (pm *manager) AddParam(p *Parameter) error {
 	p.registerFlags()
 
 	// 存储参数
-	pm.params.Store(p.Name, p)
-
-	// 更新参数顺序
-	order := pm.paramOrder.Load().([]string)
-	newOrder := append(order, p.Name)
-	pm.paramOrder.Store(newOrder)
+	pm.params[p.Name] = p
+	pm.paramOrder = append(pm.paramOrder, p.Name)
 
 	// 设置默认值
 	if p.Default != "" {
-		pm.values.Store(p.Name, p.Default)
+		pm.values[p.Name] = p.Default
 	}
 
 	return nil
@@ -152,17 +158,16 @@ func (p *Parameter) registerFlags() {
 // Parse 解析命令行参数
 func (pm *manager) Parse() error {
 	var errors []error
-	pm.params.Range(func(key, value interface{}) bool {
-		param := value.(*Parameter)
-		if val, ok := pm.values.Load(param.Name); ok {
-			if err := pm.validateValue(param, val.(string)); err != nil {
-				errors = append(errors, fmt.Errorf("parameter '%s' validation failed: %w", param.Name, err))
+	for _, name := range pm.paramOrder {
+		param := pm.params[name]
+		if val, ok := pm.values[name]; ok {
+			if err := pm.validateValue(param, val); err != nil {
+				errors = append(errors, fmt.Errorf("parameter '%s' validation failed: %w", name, err))
 			}
 		} else if param.Required {
-			errors = append(errors, fmt.Errorf("required parameter '%s' is missing", param.Name))
+			errors = append(errors, fmt.Errorf("required parameter '%s' is missing", name))
 		}
-		return true
-	})
+	}
 
 	if len(errors) > 0 {
 		return fmt.Errorf("parameter validation failed: %v", errors)
@@ -173,16 +178,15 @@ func (pm *manager) Parse() error {
 
 // parseParam 解析单个参数
 func (pm *manager) parseParam(name string) error {
-	p, ok := pm.params.Load(name)
+	p, ok := pm.params[name]
 	if !ok {
 		return nil
 	}
-	param := p.(*Parameter)
 
 	// 获取当前值
-	value := param.value.Load()
+	value := p.value.Load()
 	if value == nil {
-		if v, ok := pm.values.Load(name); ok {
+		if v, ok := pm.values[name]; ok {
 			value = v
 		}
 	}
@@ -191,10 +195,10 @@ func (pm *manager) parseParam(name string) error {
 
 	if value != nil {
 		strValue := fmt.Sprint(value)
-		if err := pm.validateValue(param, strValue); err != nil {
+		if err := pm.validateValue(p, strValue); err != nil {
 			return err
 		}
-		pm.values.Store(name, strValue)
+		pm.values[name] = strValue
 	}
 
 	return nil
@@ -233,16 +237,15 @@ func (pm *manager) validateValue(p *Parameter, value string) error {
 
 // GetString 获取字符串参数值
 func (pm *manager) GetString(name string) string {
-	if v, ok := pm.values.Load(name); ok {
-		return v.(string)
-	}
-	return ""
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return pm.values[name]
 }
 
 // GetInt 获取整型参数值
 func (pm *manager) GetInt(name string) int {
-	if v, ok := pm.values.Load(name); ok {
-		num, _ := strconv.Atoi(v.(string))
+	if v, ok := pm.values[name]; ok {
+		num, _ := strconv.Atoi(v)
 		return num
 	}
 	return 0
@@ -250,20 +253,19 @@ func (pm *manager) GetInt(name string) int {
 
 // GetBool 获取布尔参数值
 func (pm *manager) GetBool(name string) bool {
-	if v, ok := pm.values.Load(name); ok {
-		return v.(string) == "true" || v.(string) == "1"
+	if v, ok := pm.values[name]; ok {
+		return v == "true" || v == "1"
 	}
 	return false
 }
 
 // SetValue 设置参数值
 func (pm *manager) SetValue(name, value string) error {
-	if p, ok := pm.params.Load(name); ok {
-		param := p.(*Parameter)
-		if err := pm.validateValue(param, value); err != nil {
+	if p, ok := pm.params[name]; ok {
+		if err := pm.validateValue(p, value); err != nil {
 			return err
 		}
-		pm.values.Store(name, value)
+		pm.values[name] = value
 		return nil
 	}
 	return nil // fmt.Errorf("parameter %s not found", name)
@@ -271,21 +273,17 @@ func (pm *manager) SetValue(name, value string) error {
 
 // GetParam 获取参数定义
 func (pm *manager) GetParam(name string) *Parameter {
-	if p, ok := pm.params.Load(name); ok {
-		return p.(*Parameter)
-	}
-	return nil
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return pm.params[name]
 }
 
 // GetAllParams 获取所有参数
 func (pm *manager) GetAllParams() []*Parameter {
-	order := pm.paramOrder.Load().([]string)
-	params := make([]*Parameter, len(order))
+	params := make([]*Parameter, len(pm.paramOrder))
 
-	for i, name := range order {
-		if p, ok := pm.params.Load(name); ok {
-			params[i] = p.(*Parameter)
-		}
+	for i, name := range pm.paramOrder {
+		params[i] = pm.params[name]
 	}
 
 	return params
@@ -293,21 +291,19 @@ func (pm *manager) GetAllParams() []*Parameter {
 
 // HasParam 检查参数是否存在
 func (pm *manager) HasParam(name string) bool {
-	_, exists := pm.params.Load(name)
+	_, exists := pm.params[name]
 	return exists
 }
 
 // ResetValues 重置所有参数值为默认值
 func (pm *manager) ResetValues() {
-	pm.values = sync.Map{}
-	pm.parsed.Store(false)
+	pm.values = make(map[string]string)
+	pm.parsed = false
 
-	order := pm.paramOrder.Load().([]string)
-	for _, name := range order {
-		if p, ok := pm.params.Load(name); ok {
-			param := p.(*Parameter)
-			if param.Default != "" {
-				pm.values.Store(name, param.Default)
+	for _, name := range pm.paramOrder {
+		if p, ok := pm.params[name]; ok {
+			if p.Default != "" {
+				pm.values[name] = p.Default
 			}
 		}
 	}
