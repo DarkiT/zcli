@@ -145,8 +145,7 @@ type Service struct {
 	svc      service.Service
 	msgs     sync.Map
 	isWin    bool
-	paramMgr *ParamManager
-	config   *Config
+	paramMgr *manager
 	colors   *ColorScheme
 	status   atomic.Value
 }
@@ -229,15 +228,6 @@ func New(opts *Options) (*Service, error) {
 		isWin:    runtime.GOOS == "windows",
 		paramMgr: NewParamManager(),
 		colors:   colorPool.Get().(*ColorScheme),
-	}
-
-	// 3. 初始化配置
-	s.config = &Config{
-		Version:      s.opts.Version,
-		LastModified: time.Now().Unix(),
-		Args:         make(map[string]string),
-		Language:     s.GetCurrentLanguage(),
-		Debug:        s.IsDebug(),
 	}
 
 	// 4. 初始化消息映射
@@ -503,13 +493,13 @@ func (s *Service) handleCommand(cmd string) error {
 	// 初始化命令列表
 	var cmdlist []string
 
-	//添加系统服务命令
+	// 添加系统服务命令
 	for _, v := range service.ControlAction {
 		cmdlist = append(cmdlist, v)
 	}
 	cmdlist = append(cmdlist, "status")
 
-	//添加自定义命令
+	// 添加自定义命令
 	s.paramMgr.commands.Range(func(key, value interface{}) bool {
 		cmdlist = append(cmdlist, key.(string))
 		return true
@@ -608,8 +598,13 @@ func (s *Service) printStatus(msgs Messages) {
 	}
 }
 
+// SetParamManager 注册参数到参数管理器
+func (s *Service) SetParamManager(paramMgr *manager) {
+	s.paramMgr = paramMgr
+}
+
 // ParamManager 返回参数管理器
-func (s *Service) ParamManager() *ParamManager {
+func (s *Service) ParamManager() *manager {
 	return s.paramMgr
 }
 
@@ -762,11 +757,6 @@ func (s *Service) Reload() error {
 	if err := s.paramMgr.Parse(); err != nil {
 		return fmt.Errorf("failed to parse parameters: %w", err)
 	}
-
-	if err := s.ValidateConfig(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
-	}
-
 	return nil
 }
 

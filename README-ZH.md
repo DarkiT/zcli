@@ -6,19 +6,34 @@
 
 一个灵活的 Go 语言服务管理库，提供完整的服务生命周期管理功能。
 
-## 主要特性
+## 核心功能
 
-- 完整的服务生命周期管理（安装、卸载、启动、停止、重启、状态查询）
-- 多语言支持（内置中文和英文）
-- 丰富的命令行参数系统，支持参数验证
-- 运行时配置管理
-- 详细的构建信息支持
-- 可自定义主题的彩色控制台输出
-- 跨平台服务支持（Windows/Linux/macOS）
-- 自定义命令支持
+### 服务管理
+- 完整的服务生命周期管理（安装、卸载、启动、停止、重启）
+- 跨平台支持（Windows/Linux/macOS）
+- 服务状态监控和报告
+- 优雅关闭处理
+
+### 参数系统
+- 丰富的命令行参数管理
 - 参数验证和枚举值支持
 - 并发参数处理
-- 调试模式支持
+- 短格式和长格式参数支持
+- 必需参数强制检查
+- 默认值支持
+- 自定义验证规则
+
+### 国际化
+- 内置多语言支持
+- 便捷的语言切换
+- 可自定义消息模板
+
+### 开发工具
+- 调试模式与增强日志
+- 自定义命令支持
+- 彩色控制台输出与主题
+- 详细的构建信息
+- 完整的错误处理
 
 ## 安装
 
@@ -26,49 +41,27 @@
 go get github.com/darkit/zcli
 ```
 
-## 环境要求
-
-- Go 1.21.5 或更高版本
-- Windows、Linux 或 macOS 操作系统
-
-## 依赖项
-
-- github.com/kardianos/service v1.2.2
-- github.com/fatih/color v1.18.0
-
 ## 快速开始
+
+这是一个最小的示例：
 
 ```go
 package main
 
 import (
-    "fmt"
-    "log/slog"
-    "time"
     "github.com/darkit/zcli"
+    "log/slog"
 )
 
 func main() {
-    // 创建构建信息
-    buildInfo := zcli.NewBuildInfo().
-        SetDebug(true).
-        SetVersion("1.0.0").
-        SetBuildTime(time.Now())
-
     // 创建服务
     svc, err := zcli.New(&zcli.Options{
         Name:        "myapp",
         DisplayName: "我的应用",
-        Description: "这是一个示例应用服务",
+        Description: "示例服务",
         Version:     "1.0.0",
-        Language:    "zh",
-        BuildInfo:   buildInfo,
         Run: func() error {
             slog.Info("服务正在运行...")
-            return nil
-        },
-        Stop: func() error {
-            slog.Info("服务正在停止...")
             return nil
         },
     })
@@ -77,46 +70,6 @@ func main() {
         return
     }
 
-    // 添加参数
-    pm := svc.ParamManager()
-    
-    // 添加配置文件参数
-    pm.AddParam(&zcli.Parameter{
-        Name:        "config",
-        Short:       "c",
-        Long:        "config", 
-        Description: "配置文件路径",
-        Required:    true,
-        Type:        "string",
-    })
-
-    // 添加端口参数（带验证）
-    pm.AddParam(&zcli.Parameter{
-        Name:        "port",
-        Short:       "p",
-        Long:        "port",
-        Description: "服务端口",
-        Default:     "8080",
-        Type:        "string",
-        Validate: func(val string) error {
-            if val == "0" {
-                return fmt.Errorf("端口不能为0")
-            }
-            return nil
-        },
-    })
-
-    // 添加模式参数（带枚举值）
-    pm.AddParam(&zcli.Parameter{
-        Name:        "mode",
-        Short:       "m",
-        Long:        "mode",
-        Description: "运行模式",
-        Default:     "prod",
-        EnumValues:  []string{"dev", "test", "prod"},
-        Type:        "string",
-    })
-
     // 运行服务
     if err := svc.Run(); err != nil {
         slog.Error("服务运行失败", "error", err)
@@ -124,45 +77,13 @@ func main() {
 }
 ```
 
-## 命令行使用
+## 高级用法
 
-```bash
-# 显示帮助信息
-./myapp -h
-
-# 显示版本信息
-./myapp -v
-
-# 安装并启动服务
-./myapp install
-
-# 启动服务
-./myapp start
-
-# 停止服务
-./myapp stop
-
-# 重启服务
-./myapp restart
-
-# 显示服务状态
-./myapp status
-
-# 卸载服务
-./myapp uninstall
-
-# 使用自定义参数运行
-./myapp --port 9090 --mode dev --config config.toml
-
-# 使用中文
-./myapp --lang zh
-```
-
-## 参数系统
-
-该库提供了完整的参数管理系统：
+### 参数配置
 
 ```go
+pm := svc.ParamManager()
+
 // 添加必需参数
 pm.AddParam(&zcli.Parameter{
     Name:        "config",
@@ -175,15 +96,14 @@ pm.AddParam(&zcli.Parameter{
 
 // 添加带验证的参数
 pm.AddParam(&zcli.Parameter{
-    Name:        "workers",
-    Short:       "w",
-    Long:        "workers",
-    Description: "工作线程数",
-    Default:     "5",
+    Name:        "port",
+    Short:       "p",
+    Description: "服务端口",
+    Default:     "8080",
     Type:        "string",
     Validate: func(val string) error {
         if val == "0" {
-            return fmt.Errorf("工作线程数不能为0")
+            return fmt.Errorf("端口不能为0")
         }
         return nil
     },
@@ -193,90 +113,69 @@ pm.AddParam(&zcli.Parameter{
 pm.AddParam(&zcli.Parameter{
     Name:        "mode",
     Short:       "m",
-    Long:        "mode",
     Description: "运行模式",
     Default:     "prod",
     EnumValues:  []string{"dev", "test", "prod"},
     Type:        "string",
 })
-
-// 获取参数值
-port := pm.GetString("port")
-workers := pm.GetInt("workers")
-isDebug := pm.GetBool("debug")
 ```
 
-## 构建信息
-
-支持详细的构建信息，配合构建脚本使用：
-
-```bash
-#!/bin/bash
-VERSION="1.0.0"
-GIT_COMMIT=$(git rev-parse HEAD)
-GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-
-go build \
-    -ldflags "-X main.version=${VERSION} \
-              -X buildInfo.buildTime=${BUILD_TIME} \
-              -X buildInfo.gitCommit=${GIT_COMMIT} \
-              -X buildInfo.gitBranch=${GIT_BRANCH} \
-              -X buildInfo.gitTag=${GIT_TAG}" \
-    -o myapp
-```
-
-## 自定义命令
-
-支持添加自定义命令：
+### 自定义命令
 
 ```go
-pm.AddCommand("custom", "自定义命令描述", func() {
-    // 自定义命令逻辑
-    return nil
+// 添加版本命令
+pm.AddCommand("version", "显示版本信息", func() {
+    fmt.Printf("版本: %s\n", svc.GetVersion())
+}, true)
+
+// 添加检查命令
+pm.AddCommand("check", "检查服务状态", func() {
+    // 添加检查逻辑
 }, false)
 ```
 
-## 配置管理
-
-运行时配置管理：
-
-```go
-// 设置配置值
-svc.SetConfigValue("lastStartTime", time.Now().Unix())
-
-// 获取配置值
-value, exists := svc.GetConfigValue("lastStartTime")
-
-// 删除配置值
-svc.DeleteConfigValue("lastStartTime")
-
-// 检查配置是否存在
-exists := svc.HasConfigValue("lastStartTime")
-
-// 获取所有配置键
-keys := svc.GetConfigKeys()
-```
-
-## 调试模式
-
-支持调试模式：
+### 调试模式
 
 ```go
 // 启用调试模式
 svc.EnableDebug()
 
+// 使用调试日志
+if svc.IsDebug() {
+    slog.Debug("调试信息...")
+}
+
 // 禁用调试模式
 svc.DisableDebug()
-
-// 检查调试状态
-isDebug := svc.IsDebug()
 ```
 
-## 示例
+## 命令行界面
 
-查看 `examples` 目录获取完整的工作示例。
+```bash
+# 基本命令
+./myapp install    # 安装服务
+./myapp start     # 启动服务
+./myapp stop      # 停止服务
+./myapp restart   # 重启服务
+./myapp status    # 显示状态
+./myapp uninstall # 卸载服务
+
+# 带参数运行或者带参数安装服务
+./myapp --port 9090 --mode dev
+./myapp install --port 9090 --mode dev
+
+# 自定义命令
+./myapp version
+./myapp check
+
+# 帮助和版本
+./myapp -h
+./myapp -v
+```
+
+## 完整示例
+
+查看 [examples/main.go](examples/main.go) 获取完整的工作示例。
 
 ## 许可证
 
