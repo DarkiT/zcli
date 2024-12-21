@@ -94,10 +94,11 @@ pm.AddParam(&zcli.Parameter{
     Type:        "string",
 })
 
-// 添加带验证的参数
+// 添加带自定义验证的参数
 pm.AddParam(&zcli.Parameter{
     Name:        "port",
     Short:       "p",
+    Long:        "port",
     Description: "服务端口",
     Default:     "8080",
     Type:        "string",
@@ -109,10 +110,11 @@ pm.AddParam(&zcli.Parameter{
     },
 })
 
-// 添加枚举参数
+// 添加带预定义值的枚举参数
 pm.AddParam(&zcli.Parameter{
     Name:        "mode",
     Short:       "m",
+    Long:        "mode",
     Description: "运行模式",
     Default:     "prod",
     EnumValues:  []string{"dev", "test", "prod"},
@@ -149,7 +151,31 @@ if svc.IsDebug() {
 svc.DisableDebug()
 ```
 
-## 命令行界面
+### 错误处理
+
+服务提供清晰的参数验证错误信息：
+
+```bash
+# 无效的参数值
+$ ./myapp -p 0
+Error: validation failed for parameter port: 端口不能为0
+
+使用 './myapp --help' 获取更多信息。
+
+# 缺少必需参数
+$ ./myapp
+Error: parameter 'config' is required
+
+使用 './myapp --help' 获取更多信息。
+
+# 无效的枚举值
+$ ./myapp --mode invalid
+Error: invalid value for parameter mode: must be one of [dev test prod]
+
+使用 './myapp --help' 获取更多信息。
+```
+
+### 命令行界面
 
 ```bash
 # 基本命令
@@ -164,13 +190,17 @@ svc.DisableDebug()
 ./myapp --port 9090 --mode dev
 ./myapp install --port 9090 --mode dev
 
+# 显示帮助
+./myapp -h
+./myapp --help
+
+# 显示版本
+./myapp -v
+./myapp --version
+
 # 自定义命令
 ./myapp version
 ./myapp check
-
-# 帮助和版本
-./myapp -h
-./myapp -v
 ```
 
 ## 完整示例

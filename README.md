@@ -94,10 +94,11 @@ pm.AddParam(&zcli.Parameter{
     Type:        "string",
 })
 
-// Add validated parameter
+// Add validated parameter with custom validation
 pm.AddParam(&zcli.Parameter{
     Name:        "port",
     Short:       "p",
+    Long:        "port",
     Description: "Service port",
     Default:     "8080",
     Type:        "string",
@@ -109,10 +110,11 @@ pm.AddParam(&zcli.Parameter{
     },
 })
 
-// Add enum parameter
+// Add enum parameter with predefined values
 pm.AddParam(&zcli.Parameter{
     Name:        "mode",
     Short:       "m",
+    Long:        "mode",
     Description: "Running mode",
     Default:     "prod",
     EnumValues:  []string{"dev", "test", "prod"},
@@ -149,6 +151,30 @@ if svc.IsDebug() {
 svc.DisableDebug()
 ```
 
+### Error Handling
+
+The service provides clear error messages for parameter validation:
+
+```bash
+# Invalid parameter value
+$ ./myapp -p 0
+Error: validation failed for parameter port: port cannot be 0
+
+Try './myapp --help' for more information.
+
+# Missing required parameter
+$ ./myapp
+Error: parameter 'config' is required
+
+Try './myapp --help' for more information.
+
+# Invalid enum value
+$ ./myapp --mode invalid
+Error: invalid value for parameter mode: must be one of [dev test prod]
+
+Try './myapp --help' for more information.
+```
+
 ## Command Line Interface
 
 ```bash
@@ -164,13 +190,17 @@ svc.DisableDebug()
 ./myapp --port 9090 --mode dev
 ./myapp install --port 9090 --mode dev
 
+# Show help
+./myapp -h
+./myapp --help
+
+# Show version
+./myapp -v
+./myapp --version
+
 # Custom commands
 ./myapp version
 ./myapp check
-
-# Help and version
-./myapp -h
-./myapp -v
 ```
 
 ## Complete Example

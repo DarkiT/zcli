@@ -261,6 +261,9 @@ func (pm *manager) GetBool(name string) bool {
 
 // SetValue 设置参数值
 func (pm *manager) SetValue(name, value string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
 	if p, ok := pm.params[name]; ok {
 		if err := pm.validateValue(p, value); err != nil {
 			return err
@@ -268,7 +271,7 @@ func (pm *manager) SetValue(name, value string) error {
 		pm.values[name] = value
 		return nil
 	}
-	return nil // fmt.Errorf("parameter %s not found", name)
+	return fmt.Errorf("parameter %s not found", name)
 }
 
 // GetParam 获取参数定义

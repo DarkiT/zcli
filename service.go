@@ -308,7 +308,7 @@ func (s *Service) Run() error {
 	msgs := s.getMessage()
 
 	// 1. 创建自定义的 FlagSet
-	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 
 	// 2. 设置基本的 flag
 	var help, version bool
@@ -319,6 +319,7 @@ func (s *Service) Run() error {
 
 	// 3. 创建参数值存储映射
 	paramValues := make(map[string]*string)
+	paramMap := make(map[string]string)
 
 	// 4. 注册自定义参数到 FlagSet
 	s.paramMgr.mu.RLock()
@@ -332,12 +333,14 @@ func (s *Service) Run() error {
 		// 注册长参数
 		if param.Long != "" && !registeredFlags[param.Long] {
 			fs.StringVar(paramValue, param.Long, param.Default, param.Description)
+			paramMap[param.Long] = param.Name
 			registeredFlags[param.Long] = true
 		}
 
 		// 注册短参数
 		if param.Short != "" && !registeredFlags[param.Short] {
 			fs.StringVar(paramValue, param.Short, param.Default, param.Description)
+			paramMap[param.Short] = param.Name
 			registeredFlags[param.Short] = true
 		}
 	}
@@ -350,14 +353,39 @@ func (s *Service) Run() error {
 		return err
 	}
 
-	// 6. 从命令行参数更新值到 ParamManager
-	s.paramMgr.mu.Lock()
-	for name, paramValue := range paramValues {
-		if param, ok := s.paramMgr.params[name]; ok {
-			s.paramMgr.values[param.Name] = *paramValue
+	// 6. 验证并更新参数值
+	var validationError error
+	fs.Visit(func(f *flag.Flag) {
+		if validationError != nil {
+			return // 如果已经有错误，跳过后续验证
+		}
+		if paramName, ok := paramMap[f.Name]; ok {
+			if err := s.paramMgr.SetValue(paramName, f.Value.String()); err != nil {
+				validationError = err
+			}
+		}
+	})
+
+	// 处理验证错误
+	if validationError != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", validationError)
+		fmt.Fprintf(os.Stderr, "\nTry '%s --help' for more information.\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	// 7. 检查必需参数
+	s.paramMgr.mu.RLock()
+	for _, param := range s.paramMgr.params {
+		if param.Required {
+			if value := s.paramMgr.GetString(param.Name); value == "" {
+				s.paramMgr.mu.RUnlock()
+				fmt.Fprintf(os.Stderr, "Error: parameter '%s' is required\n", param.Name)
+				fmt.Fprintf(os.Stderr, "\nTry '%s --help' for more information.\n", os.Args[0])
+				os.Exit(1)
+			}
 		}
 	}
-	s.paramMgr.mu.Unlock()
+	s.paramMgr.mu.RUnlock()
 
 	switch {
 	case help:
@@ -762,7 +790,7 @@ func (s *Service) UpdateBuildInfo(updates map[string]interface{}) error {
 // Reload 重新加载配置
 func (s *Service) Reload() error {
 	if err := s.paramMgr.Parse(); err != nil {
-		return fmt.Errorf("failed to parse parameters: %w", err)
+		return err
 	}
 	return nil
 }
