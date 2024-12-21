@@ -3,7 +3,6 @@ package zcli
 import (
 	"fmt"
 	"sync"
-	"time"
 )
 
 // Config 服务配置
@@ -14,50 +13,6 @@ type Config struct {
 	Language     string            `toml:"language"`
 	Debug        bool              `toml:"debug"`
 	Runtime      sync.Map          `toml:"-"`
-}
-
-var configPool = sync.Pool{
-	New: func() interface{} {
-		return &Config{
-			Version:      "1.0.0",
-			LastModified: time.Now().Unix(),
-			Args:         make(map[string]string),
-		}
-	},
-}
-
-// LoadConfig 加载配置
-func (s *Service) LoadConfig() error {
-	// 从对象池获取默认配置
-	config := configPool.Get().(*Config)
-
-	// 设置基本配置
-	config.Version = "1.0.0"
-	config.LastModified = time.Now().Unix()
-	config.Args = make(map[string]string)
-
-	// 更新服务配置
-	s.config = config
-
-	return nil
-}
-
-// SaveConfig 保存配置
-func (s *Service) SaveConfig() error {
-	// 更新配置信息
-	s.config.LastModified = time.Now().Unix()
-	s.config.Language = s.GetCurrentLanguage()
-	s.config.Debug = s.IsDebug()
-
-	// 收集当前参数值
-	values := make(map[string]string)
-	s.paramMgr.values.Range(func(key, value interface{}) bool {
-		values[key.(string)] = value.(string)
-		return true
-	})
-	s.config.Args = values
-
-	return nil
 }
 
 // GetConfigValue 获取配置值
@@ -93,10 +48,7 @@ func (s *Service) GetConfigKeys() []string {
 
 // ClearConfig 清除配置
 func (s *Service) ClearConfig() error {
-	// 重置配置
-	s.config = configPool.Get().(*Config)
 	s.paramMgr.ResetValues()
-
 	return nil
 }
 

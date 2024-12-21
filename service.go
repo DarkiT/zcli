@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -108,15 +107,14 @@ func (bi *BuildInfo) String() string {
 
 // NewBuildInfo 创建构建信息
 func NewBuildInfo() *BuildInfo {
-	bi := &BuildInfo{
-		Version:      "0.0.1",
+	return &BuildInfo{
+		Version:      "1.0.0",
 		BuildTime:    time.Now(),
 		GoVersion:    runtime.Version(),
 		Platform:     runtime.GOOS,
 		Architecture: runtime.GOARCH,
 		Compiler:     runtime.Compiler,
 	}
-	return bi
 }
 
 // Options 服务选项
@@ -151,6 +149,7 @@ type Service struct {
 	config   *Config
 	colors   *ColorScheme
 	status   atomic.Value
+	commands sync.Map // 存储自定义命令
 }
 
 // Messages 多语言消息
@@ -182,7 +181,7 @@ var defaultMessages = map[string]Messages{
 		Start:        "Start the service",
 		Stop:         "Stop the service",
 		Restart:      "Restart the service",
-		Status:       "Show service status",
+		Status:       "Print service status",
 		Usage:        "Usage: %s [options] [command]",
 		Commands:     "Commands:",
 		StatusFormat: "Service %s status: %s",
@@ -202,7 +201,7 @@ var defaultMessages = map[string]Messages{
 		Start:        "启动服务",
 		Stop:         "停止服务",
 		Restart:      "重启服务",
-		Status:       "显示服务状态",
+		Status:       "服务状态",
 		Usage:        "用法：%s [选项] [命令]",
 		Commands:     "命令：",
 		StatusFormat: "服务(%s)状态：%s",
@@ -220,38 +219,57 @@ var defaultMessages = map[string]Messages{
 
 // New 创建新服务实例
 func New(opts *Options) (*Service, error) {
-	if opts.Run == nil {
-		return nil, fmt.Errorf("run function is required")
+	// 1. 验证选项
+	if err := validateOptions(opts); err != nil {
+		return nil, fmt.Errorf("invalid options: %w", err)
 	}
 
-	if opts.BuildInfo == nil {
-		opts.BuildInfo = NewBuildInfo()
-	}
-
+	// 2. 创建服务实例
 	s := &Service{
 		opts:     opts,
 		isWin:    runtime.GOOS == "windows",
 		paramMgr: NewParamManager(),
-		config:   &Config{},
 		colors:   colorPool.Get().(*ColorScheme),
 	}
 
-	// 初始化消息映射
+	// 3. 初始化配置
+	s.config = &Config{
+		Version:      s.opts.Version,
+		LastModified: time.Now().Unix(),
+		Args:         make(map[string]string),
+		Language:     s.GetCurrentLanguage(),
+		Debug:        s.IsDebug(),
+	}
+
+	// 4. 初始化消息映射
 	for lang, msgs := range defaultMessages {
 		s.msgs.Store(lang, msgs)
 	}
 
-	// 设置颜色支持
+	// 5. 设置颜色支持
 	if opts.NoColor || (s.isWin && !isColorSupported()) {
 		color.NoColor = true
 	}
 
+	// 6. 获取命令行参数 检查是否有参数，且第一个参数是否为控制命令
 	args := os.Args[1:]
 	if len(os.Args) > 1 {
-		args = os.Args[2:]
+		firstArg := os.Args[1]
+		// 检查第一个参数是否在 ControlAction 列表中
+		isControlCmd := false
+		for _, cmd := range service.ControlAction {
+			if firstArg == cmd {
+				isControlCmd = true
+				break
+			}
+		}
+		// 如果是控制命令，则跳过第一个参数
+		if isControlCmd || firstArg == "status" {
+			args = os.Args[2:]
+		}
 	}
 
-	// 构建服务配置
+	// 7. 初始化服务管理器
 	svcConfig := &service.Config{
 		Name:             opts.Name,
 		DisplayName:      opts.DisplayName,
@@ -276,20 +294,11 @@ func New(opts *Options) (*Service, error) {
 		return nil, err
 	}
 	s.svc = svc
-
-	// 加载配置
-	if err = s.LoadConfig(); err != nil {
-		return nil, err
-	}
-
 	return s, nil
 }
 
 // Start 实现 service.Interface
 func (s *Service) Start(_ service.Service) error {
-	if err := s.LoadConfig(); err != nil {
-		return err
-	}
 	return s.opts.Run()
 }
 
@@ -429,7 +438,7 @@ func (s *Service) showHelp() {
 
 	buf.WriteString(s.colors.Usage.Sprintf(msgs.Usage+"\n\n", os.Args[0]))
 
-	// Options section
+	// 选项部分
 	buf.WriteString(s.colors.OptionsTitle.Sprint(msgs.Options + "\n"))
 	buf.WriteString(s.colors.Option.Sprintf("  %-20s%s\n", "-h, --help", msgs.Help))
 	buf.WriteString(s.colors.Option.Sprintf("  %-20s%s\n", "-v, --version", msgs.Version))
@@ -451,9 +460,11 @@ func (s *Service) showHelp() {
 	}
 	buf.WriteString("\n")
 
-	// Commands section
+	// 命令部分
 	buf.WriteString(s.colors.CommandsTitle.Sprint(msgs.Commands + "\n"))
-	commands := []struct{ cmd, desc string }{
+
+	// 系统服务命令
+	defaultCommands := []struct{ cmd, desc string }{
 		{"install", msgs.Install},
 		{"uninstall", msgs.Uninstall},
 		{"start", msgs.Start},
@@ -461,9 +472,21 @@ func (s *Service) showHelp() {
 		{"restart", msgs.Restart},
 		{"status", msgs.Status},
 	}
-	for _, cmd := range commands {
+
+	// 显示默认命令
+	for _, cmd := range defaultCommands {
 		buf.WriteString(s.colors.Command.Sprintf("  %-20s%s\n", cmd.cmd, cmd.desc))
 	}
+
+	// 显示自定义命令
+	s.commands.Range(func(key, value interface{}) bool {
+		cmd := value.(*command)
+		if !cmd.Hidden {
+			buf.WriteString(s.colors.Command.Sprintf("  %-20s%s\n", cmd.Name, cmd.Description))
+		}
+		return true
+	})
+
 	buf.WriteString("\n")
 
 	// Examples section
@@ -478,58 +501,92 @@ func (s *Service) showHelp() {
 func (s *Service) handleCommand(cmd string) error {
 	msgs := s.getMessage()
 
-	actions := map[string]struct {
-		action func() error
-		msg    string
-	}{
-		"install": {
-			action: func() error {
-				if err := s.SaveConfig(); err != nil {
-					return err
-				}
-				if err := s.svc.Install(); err != nil {
-					return err
-				}
-				return s.svc.Start()
-			},
-			msg: msgs.Install,
-		},
-		"uninstall": {
-			action: func() error {
-				os.Remove(s.getConfigPath())
-				_ = s.svc.Stop()
-				return s.svc.Uninstall()
-			},
-			msg: msgs.Uninstall,
-		},
-		"start":   {action: s.svc.Start, msg: msgs.Start},
-		"stop":    {action: s.svc.Stop, msg: msgs.Stop},
-		"restart": {action: s.svc.Restart, msg: msgs.Restart},
-		"status": {
-			action: func() error {
-				status, err := s.svc.Status()
-				if err != nil {
-					return err
-				}
-				s.status.Store(status)
-				s.printStatus(msgs)
-				return nil
-			},
-			msg: "",
-		},
+	// 初始化命令列表
+	var cmdlist []string
+
+	//添加系统服务命令
+	for _, v := range service.ControlAction {
+		cmdlist = append(cmdlist, v)
+	}
+	cmdlist = append(cmdlist, "status")
+
+	//添加自定义命令
+	s.commands.Range(func(key, value interface{}) bool {
+		cmdlist = append(cmdlist, key.(string))
+		return true
+	})
+
+	// 首先验证命令是否存在
+	validCmd := false
+	for _, c := range cmdlist {
+		if c == cmd {
+			validCmd = true
+			break
+		}
 	}
 
-	if action, ok := actions[cmd]; ok {
-		if err := action.action(); err != nil {
+	if !validCmd {
+		return fmt.Errorf("unknown command: %s\nAvailable commands: %s", cmd, strings.Join(cmdlist, ", "))
+	}
+
+	switch cmd {
+	case "install":
+		if err := s.svc.Install(); err != nil {
 			return err
 		}
-		if action.msg != "" {
-			s.colors.Success.Printf("√ %s\n", action.msg)
+		if err := s.svc.Start(); err != nil {
+			return err
 		}
-		return nil
+		s.colors.Success.Printf("√ %s\n", msgs.Install)
+
+	case "uninstall":
+		_ = s.svc.Stop()
+		if err := s.svc.Uninstall(); err != nil {
+			return err
+		}
+		s.colors.Success.Printf("√ %s\n", msgs.Uninstall)
+
+	case "start":
+		if err := s.svc.Start(); err != nil {
+			return err
+		}
+		s.colors.Success.Printf("√ %s\n", msgs.Start)
+
+	case "stop":
+		if err := s.svc.Stop(); err != nil {
+			return err
+		}
+		s.colors.Success.Printf("√ %s\n", msgs.Stop)
+
+	case "restart":
+		if err := s.svc.Restart(); err != nil {
+			return err
+		}
+		s.colors.Success.Printf("√ %s\n", msgs.Restart)
+
+	case "status":
+		status, err := s.svc.Status()
+		if err != nil {
+			return err
+		}
+		s.status.Store(status)
+		s.printStatus(msgs)
+
+	default:
+		// 处理自定义命令
+		if cmdValue, exists := s.commands.Load(cmd); exists {
+			cmds := cmdValue.(*command)
+			if cmds.Run != nil {
+				if err := cmds.Run(); err != nil {
+					return err
+				}
+				return nil
+			}
+			return fmt.Errorf("command %s has no Run function defined", cmds.Name)
+		}
 	}
 
-	return fmt.Errorf("unknown command: %s", cmd)
+	return nil
 }
 
 // printStatus 打印状态信息
@@ -589,18 +646,6 @@ func (s *Service) GetBuildInfo() *BuildInfo {
 // SetBuildInfo 设置构建信息
 func (s *Service) SetBuildInfo(bi *BuildInfo) {
 	s.opts.BuildInfo = bi
-}
-
-// getConfigPath 获取配置文件路径
-func (s *Service) getConfigPath() string {
-	configDir := ""
-	switch runtime.GOOS {
-	case "windows":
-		configDir = filepath.Join(os.Getenv("PROGRAMDATA"), s.opts.Name)
-	default:
-		configDir = filepath.Join(os.Getenv("HOME"), "."+s.opts.Name)
-	}
-	return filepath.Join(configDir, "config.toml")
 }
 
 // GetStatus 获取服务状态
@@ -717,10 +762,6 @@ func (s *Service) UpdateBuildInfo(updates map[string]interface{}) error {
 
 // Reload 重新加载配置
 func (s *Service) Reload() error {
-	if err := s.LoadConfig(); err != nil {
-		return fmt.Errorf("failed to reload config: %w", err)
-	}
-
 	if err := s.paramMgr.Parse(); err != nil {
 		return fmt.Errorf("failed to parse parameters: %w", err)
 	}
@@ -754,11 +795,33 @@ func (s *Service) String() string {
 
 // Close 关闭服务并清理资源
 func (s *Service) Close() error {
-	if err := s.SaveConfig(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-
 	colorPool.Put(s.colors)
+	return nil
+}
+
+// validateOptions 验证选项
+func validateOptions(opts *Options) error {
+	if opts == nil {
+		return fmt.Errorf("options cannot be nil")
+	}
+	if opts.Name == "" {
+		return fmt.Errorf("service name is required")
+	}
+	if opts.Run == nil {
+		return fmt.Errorf("run function is required")
+	}
+	if opts.DisplayName == "" {
+		opts.DisplayName = opts.Name // 使用服务名作为显示名
+	}
+	if opts.Version == "" {
+		opts.Version = "1.0.0" // 设置默认版本号
+	}
+	if opts.Language == "" {
+		opts.Language = "en" // 设置默认语言
+	}
+	if opts.BuildInfo == nil {
+		opts.BuildInfo = NewBuildInfo()
+	}
 	return nil
 }
 
@@ -789,4 +852,22 @@ func isColorSupported() bool {
 	}
 
 	return false
+}
+
+// command 定义命令结构
+type command struct {
+	Name        string       // 命令名称
+	Description string       // 命令描述
+	Hidden      bool         // 是否在帮助中隐藏
+	Run         func() error // 子命令启动回调函数。
+}
+
+// AddCommand 添加自定义命令
+func (s *Service) AddCommand(name, description string, run func() error, hidden bool) {
+	s.commands.Store(name, &command{
+		Name:        name,
+		Description: description,
+		Hidden:      hidden,
+		Run:         run,
+	})
 }

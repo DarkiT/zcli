@@ -139,10 +139,6 @@ func (app *ServiceApp) run() error {
 
 	app.svc.SetConfigValue("lastStartTime", time.Now().Unix())
 
-	if err := app.svc.SaveConfig(); err != nil {
-		app.logger.Error("保存配置失败", err)
-	}
-
 	for app.isRunning {
 		time.Sleep(time.Second)
 	}
@@ -164,7 +160,7 @@ func main() {
 	}
 
 	if err := app.svc.Run(); err != nil {
-		slog.Error("服务运行错误:" + err.Error())
+		slog.Error(err.Error())
 		os.Exit(1)
 	}
 }

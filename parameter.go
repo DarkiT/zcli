@@ -133,11 +133,9 @@ func (p *Parameter) registerFlags() {
 // Parse 解析命令行参数
 func (pm *ParamManager) Parse() error {
 	var errors []error
-
 	pm.params.Range(func(key, value interface{}) bool {
 		param := value.(*Parameter)
 		if val, ok := pm.values.Load(param.Name); ok {
-			// 验证参数值
 			if err := pm.validateValue(param, val.(string)); err != nil {
 				errors = append(errors, fmt.Errorf("parameter '%s' validation failed: %w", param.Name, err))
 			}
