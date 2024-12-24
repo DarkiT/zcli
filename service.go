@@ -3,6 +3,7 @@ package zcli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -101,7 +102,9 @@ func (bi *BuildInfo) String() string {
 		fmt.Fprintf(&b, "Git Commit:   %s\n", bi.GitCommit)
 	}
 	fmt.Fprintf(&b, "Build Mode:   %s\n", map[bool]string{true: "Debug", false: "Release"}[bi.Debug.Load()])
-	fmt.Fprintf(&b, "Build Time:   %s\n", bi.BuildTime.Format(time.DateTime))
+	if !bi.BuildTime.IsZero() {
+		fmt.Fprintf(&b, "Build Time:   %s\n", bi.BuildTime.Format(time.DateTime))
+	}
 	return b.String()
 }
 
@@ -109,7 +112,6 @@ func (bi *BuildInfo) String() string {
 func NewBuildInfo() *BuildInfo {
 	return &BuildInfo{
 		Version:      "1.0.0",
-		BuildTime:    time.Now(),
 		GoVersion:    runtime.Version(),
 		Platform:     runtime.GOOS,
 		Architecture: runtime.GOARCH,
@@ -153,66 +155,72 @@ type Service struct {
 
 // Messages 多语言消息
 type Messages struct {
-	Install      string // 安装服务提示信息
-	Uninstall    string // 卸载服务提示信息
-	Start        string // 启动服务提示信息
-	Stop         string // 停止服务提示信息
-	Restart      string // 重启服务提示信息
-	Status       string // 服务状态提示信息
-	Usage        string // 用法提示
-	Commands     string // 命令列表
-	StatusFormat string // 格式化状态字符串
-	Running      string // 正在运行
-	Stopped      string // 已停止
-	Unknown      string // 未知状态
-	Example      string // 示例
-	Options      string // 选项说明
-	Required     string // 必需项
-	Default      string // 默认值
-	Help         string // 帮助菜单
-	Version      string // 版本信息
+	Install         string // 安装服务提示信息
+	Uninstall       string // 卸载服务提示信息
+	Start           string // 启动服务提示信息
+	Stop            string // 停止服务提示信息
+	Restart         string // 重启服务提示信息
+	Status          string // 服务状态提示信息
+	Usage           string // 用法提示
+	Commands        string // 命令列表
+	StatusFormat    string // 格式化状态字符串
+	Running         string // 正在运行
+	Stopped         string // 已停止
+	Unknown         string // 未知状态
+	Example         string // 示例
+	Options         string // 选项说明
+	Required        string // 必需项
+	Default         string // 默认值
+	Help            string // 帮助菜单
+	Version         string // 版本信息
+	InvalidFlag     string // 无效的标志
+	InvalidFlagWith string // 错误: 未知的参数 '%s'
 }
 
 var defaultMessages = map[string]Messages{
 	"en": {
-		Install:      "Install the service",
-		Uninstall:    "Uninstall the service",
-		Start:        "Start the service",
-		Stop:         "Stop the service",
-		Restart:      "Restart the service",
-		Status:       "Print service status",
-		Usage:        "Usage: %s [options] [command]",
-		Commands:     "Commands:",
-		StatusFormat: "Service %s status: %s",
-		Running:      "running",
-		Stopped:      "stopped",
-		Unknown:      "unknown",
-		Example:      "Examples:",
-		Options:      "Options:",
-		Required:     "required",
-		Default:      "default",
-		Help:         "Show help menu",
-		Version:      "Show version info",
+		Install:         "Install the service",
+		Uninstall:       "Uninstall the service",
+		Start:           "Start the service",
+		Stop:            "Stop the service",
+		Restart:         "Restart the service",
+		Status:          "Print service status",
+		Usage:           "Usage: %s [options] [command]",
+		Commands:        "Commands:",
+		StatusFormat:    "Service %s status: %s",
+		Running:         "running",
+		Stopped:         "stopped",
+		Unknown:         "unknown",
+		Example:         "Examples:",
+		Options:         "Options:",
+		Required:        "required",
+		Default:         "default",
+		Help:            "Show help menu",
+		Version:         "Show version info",
+		InvalidFlag:     "Error: unknown flag",
+		InvalidFlagWith: "Error: unknown flag '%s'",
 	},
 	"zh": {
-		Install:      "安装服务",
-		Uninstall:    "卸载服务",
-		Start:        "启动服务",
-		Stop:         "停止服务",
-		Restart:      "重启服务",
-		Status:       "服务状态",
-		Usage:        "用法：%s [选项] [命令]",
-		Commands:     "命令：",
-		StatusFormat: "服务(%s)状态：%s",
-		Running:      "运行中",
-		Stopped:      "已停止",
-		Unknown:      "未知",
-		Example:      "示例：",
-		Options:      "选项：",
-		Required:     "必需",
-		Default:      "默认值",
-		Help:         "显示帮助菜单",
-		Version:      "显示版本信息",
+		Install:         "安装服务",
+		Uninstall:       "卸载服务",
+		Start:           "启动服务",
+		Stop:            "停止服务",
+		Restart:         "重启服务",
+		Status:          "服务状态",
+		Usage:           "用法：%s [选项] [命令]",
+		Commands:        "命令：",
+		StatusFormat:    "服务(%s)状态：%s",
+		Running:         "运行中",
+		Stopped:         "已停止",
+		Unknown:         "未知",
+		Example:         "示例：",
+		Options:         "选项：",
+		Required:        "必需",
+		Default:         "默认值",
+		Help:            "显示帮助菜单",
+		Version:         "显示版本信息",
+		InvalidFlag:     "错误: 未知的参数",
+		InvalidFlagWith: "错误: 未知的参数 '%s'",
 	},
 }
 
@@ -346,11 +354,23 @@ func (s *Service) Run() error {
 	}
 	s.paramMgr.mu.RUnlock()
 
+	// 设置自定义错误处理，遇到错误时显示帮助菜单
 	fs.Usage = s.showHelp
+
+	// 自定义错误输出
+	fs.SetOutput(io.Discard)
 
 	// 5. 解析命令行参数
 	if err := fs.Parse(os.Args[1:]); err != nil {
-		return err
+		// 从错误信息中提取具体的参数
+		errStr := err.Error()
+		if strings.HasPrefix(errStr, "flag provided but not defined:") {
+			flag := strings.TrimSpace(strings.TrimPrefix(errStr, "flag provided but not defined:"))
+			fmt.Fprintf(os.Stderr, "\n%s\n\n", s.colors.Error.Sprintf(msgs.InvalidFlagWith, flag))
+		} else {
+			fmt.Fprintf(os.Stderr, "\n%s\n\n", s.colors.Error.Sprint(msgs.InvalidFlag))
+		}
+		os.Exit(1)
 	}
 
 	// 6. 验证并更新参数值
