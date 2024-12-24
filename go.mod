@@ -1,6 +1,6 @@
 module github.com/darkit/zcli
 
-go 1.21.5
+go 1.18
 
 require (
 	github.com/fatih/color v1.18.0
