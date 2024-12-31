@@ -15,25 +15,21 @@ import (
 	"github.com/kardianos/service"
 )
 
-// 颜色定义优化 - 使用对象池
-var colorPool = sync.Pool{
-	New: func() interface{} {
-		return &ColorScheme{
-			Title:         color.New(color.FgCyan, color.Bold),
-			Success:       color.New(color.FgGreen, color.Bold),
-			Error:         color.New(color.FgRed, color.Bold),
-			Info:          color.New(color.FgWhite),
-			Version:       color.New(color.FgWhite, color.Bold),
-			BuildInfo:     color.New(color.FgYellow),
-			Usage:         color.New(color.FgGreen),
-			OptionsTitle:  color.New(color.FgMagenta, color.Bold),
-			Option:        color.New(color.FgCyan),
-			CommandsTitle: color.New(color.FgBlue, color.Bold),
-			Command:       color.New(color.FgWhite),
-			ExamplesTitle: color.New(color.FgGreen, color.Bold),
-			Example:       color.New(color.FgYellow),
-		}
-	},
+// ColorScheme 定义 CLI 的颜色方案
+var DefaultColors = &ColorScheme{
+	Title:         color.New(color.FgCyan, color.Bold),
+	Success:       color.New(color.FgGreen, color.Bold),
+	Error:         color.New(color.FgRed, color.Bold),
+	Info:          color.New(color.FgWhite),
+	Version:       color.New(color.FgWhite, color.Bold),
+	BuildInfo:     color.New(color.FgYellow),
+	Usage:         color.New(color.FgGreen),
+	OptionsTitle:  color.New(color.FgMagenta, color.Bold),
+	Option:        color.New(color.FgCyan),
+	CommandsTitle: color.New(color.FgBlue, color.Bold),
+	Command:       color.New(color.FgWhite),
+	ExamplesTitle: color.New(color.FgGreen, color.Bold),
+	Example:       color.New(color.FgYellow),
 }
 
 type ColorScheme struct {
@@ -236,7 +232,7 @@ func New(opts *Options) (*Service, error) {
 		opts:     opts,
 		isWin:    runtime.GOOS == "windows",
 		paramMgr: NewParamManager(),
-		colors:   colorPool.Get().(*ColorScheme),
+		colors:   DefaultColors,
 		msgs:     make(map[string]Messages),
 	}
 
@@ -837,7 +833,6 @@ func (s *Service) String() string {
 
 // Close 关闭服务并清理资源
 func (s *Service) Close() error {
-	colorPool.Put(s.colors)
 	return nil
 }
 

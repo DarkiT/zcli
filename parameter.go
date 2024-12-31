@@ -176,34 +176,6 @@ func (pm *manager) Parse() error {
 	return nil
 }
 
-// parseParam 解析单个参数
-func (pm *manager) parseParam(name string) error {
-	p, ok := pm.params[name]
-	if !ok {
-		return nil
-	}
-
-	// 获取当前值
-	value := p.value.Load()
-	if value == nil {
-		if v, ok := pm.values[name]; ok {
-			value = v
-		}
-	}
-	// 调试输出
-	fmt.Printf("Parsing parameter: %s, Current value: %v\n", name, value)
-
-	if value != nil {
-		strValue := fmt.Sprint(value)
-		if err := pm.validateValue(p, strValue); err != nil {
-			return err
-		}
-		pm.values[name] = strValue
-	}
-
-	return nil
-}
-
 // validateValue 验证参数值
 func (pm *manager) validateValue(p *Parameter, value string) error {
 	// 必需参数检查
