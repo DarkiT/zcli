@@ -1,212 +1,162 @@
-# Service Manager
-
+# ZCli 更美观的命令行应用框架
 [![Go Reference](https://pkg.go.dev/badge/github.com/darkit/zcli.svg)](https://pkg.go.dev/github.com/darkit/zcli)
 [![Go Report Card](https://goreportcard.com/badge/github.com/darkit/zcli)](https://goreportcard.com/report/github.com/darkit/zcli)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/zcli/blob/master/LICENSE)
 
-A flexible service management library for Go applications with comprehensive lifecycle management capabilities.
+ZCli 是一个基于 [cobra](https://github.com/spf13/cobra) 的命令行应用框架，提供了更友好的命令行界面和系统服务管理功能。它专注于简化命令行应用的开发，并提供了丰富的国际化支持。
 
-## Core Features
+## 特性
 
-### Service Management
-- Complete service lifecycle management (install, uninstall, start, stop, restart)
-- Cross-platform support (Windows/Linux/macOS)
-- Service status monitoring and reporting
-- Graceful shutdown handling
+### 1. 友好的命令行界面
+- 支持彩色输出，自动检测终端颜色支持
+- 自定义 Logo 显示
+- 分组显示命令（普通命令和系统命令）
+- 优化的帮助信息展示
+- 支持命令补全
 
-### Parameter System
-- Rich command-line parameter management
-- Parameter validation and enumeration support
-- Concurrent parameter processing
-- Short and long parameter formats
-- Required parameter enforcement
-- Default value support
-- Custom validation rules
+### 2. 系统服务集成
+- 一键集成系统服务管理功能
+- 支持服务的安装、卸载、启动、停止、重启和状态查询
+- 支持服务配置的自定义（工作目录、环境变量等）
+- 跨平台支持 (Windows, Linux, macOS)
 
-### Internationalization
-- Built-in multi-language support
-- Easy language switching
-- Customizable message templates
+### 3. 国际化支持
+- 内置中文和英文支持
+- 可扩展的语言包系统
+- 支持自定义语言包
 
-### Development Tools
-- Debug mode with enhanced logging
-- Custom command support
-- Colorful console output with themes
-- Detailed build information
-- Comprehensive error handling
+### 4. 版本信息管理
+- 详细的版本信息展示
+- 支持构建信息的自定义
+- 支持调试/发布模式切换
 
-## Installation
-
-```bash
-go get github.com/darkit/zcli
-```
-
-## Quick Start
-
-Here's a minimal example to get you started:
+## 快速开始
 
 ```go
 package main
 
 import (
-    "log/slog"
+    "fmt"
+    "time"
+
     "github.com/darkit/zcli"
 )
 
 func main() {
-    // Create service
-    svc, err := zcli.New(&zcli.Options{
-        Name:        "myapp",
-        DisplayName: "My Application",
-        Description: "Example service",
-        Version:     "1.0.0",
-        Run: func() error {
-            slog.Info("Service is running...")
-            return nil
-        },
-    })
-    if err != nil {
-        slog.Error("Failed to create service", "error", err)
-        return
-    }
+    // 创建应用实例
+    app := zcli.NewCli(
+        zcli.WithName("myapp"),           // 设置应用名称
+        zcli.WithDisplayName("My App"),   // 设置显示名称
+        zcli.WithDescription("示例应用"), // 设置应用描述
+        zcli.WithLanguage("zh"),          // 设置语言
+        zcli.WithRun(run),                // 设置主函数
+    )
 
-    // Run service
-    if err := svc.Run(); err != nil {
-        slog.Error("Service failed", "error", err)
+    // 添加命令行参数
+    app.PersistentFlags().StringP("config", "c", "", "配置文件路径")
+
+    // 执行应用
+    if err := app.Execute(); err != nil {
+        fmt.Println(err)
+    }
+}
+
+func run() {
+    // 应用主逻辑
+    for {
+        time.Sleep(time.Second)
+        fmt.Println("应用运行中...")
     }
 }
 ```
 
-## Advanced Usage
+## 高级特性
 
-### Parameter Configuration
+### 自定义服务配置
 
 ```go
-pm := svc.ParamManager()
+zcli.NewCli(
+    zcli.WithName("myapp"),
+    zcli.WithWorkingDirectory("/opt/myapp"),
+    zcli.WithEnvVar("ENV", "production"),
+    zcli.WithDependencies("mysql", "redis"),
+)
+```
 
-// Add required parameter
-pm.AddParam(&zcli.Parameter{
-    Name:        "config",
-    Short:       "c",
-    Long:        "config",
-    Description: "Config file path",
-    Required:    true,
-    Type:        "string",
-})
+### 版本信息管理
 
-// Add validated parameter with custom validation
-pm.AddParam(&zcli.Parameter{
-    Name:        "port",
-    Short:       "p",
-    Long:        "port",
-    Description: "Service port",
-    Default:     "8080",
-    Type:        "string",
-    Validate: func(val string) error {
-        if val == "0" {
-            return fmt.Errorf("port cannot be 0")
-        }
-        return nil
+```go
+version := zcli.NewVersionInfo().
+    SetVersion("1.0.0").
+    SetDebug(true).
+    SetBuildTime(time.Now())
+
+zcli.NewCli(
+    zcli.WithName("myapp"),
+    zcli.WithBuildInfo(version),
+)
+```
+
+### 自定义语言包
+
+```go
+customLang := &zcli.Language{
+    Service: zcli.ServiceMessages{
+        Install: "安装服务",
+        Start:   "启动服务",
+        // ...
     },
-})
-
-// Add enum parameter with predefined values
-pm.AddParam(&zcli.Parameter{
-    Name:        "mode",
-    Short:       "m",
-    Long:        "mode",
-    Description: "Running mode",
-    Default:     "prod",
-    EnumValues:  []string{"dev", "test", "prod"},
-    Type:        "string",
-})
-```
-
-### Custom Commands
-
-```go
-// Add version command
-pm.AddCommand("version", "Show version info", func() {
-    fmt.Printf("Version: %s\n", svc.GetVersion())
-}, true)
-
-// Add check command
-pm.AddCommand("check", "Check service status", func() {
-    // Add check logic
-}, false)
-```
-
-### Debug Mode
-
-```go
-// Enable debug mode
-svc.EnableDebug()
-
-// Use debug logging
-if svc.IsDebug() {
-    slog.Debug("Debug information...")
+    // ...
 }
 
-// Disable debug mode
-svc.DisableDebug()
+zcli.AddLanguage("custom", customLang)
+zcli.SetDefaultLanguage("custom")
 ```
 
-### Error Handling
-
-The service provides clear error messages for parameter validation:
+## 命令行界面示例
 
 ```bash
-# Invalid parameter value
-$ ./myapp -p 0
-Error: validation failed for parameter port: port cannot be 0
+$ myapp --help
 
-Try './myapp --help' for more information.
+███████╗████████╗ ██████╗  ██████╗ ██╗     
+╚══███╔╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     
+  ███╔╝    ██║   ██║   ██║██║   ██║██║     
+ ███╔╝     ██║   ██║   ██║██║   ██║██║     
+███████╗   ██║   ╚██████╔╝╚██████╔╝███████╗
+╚══════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝ Ver 1.0.0
 
-# Missing required parameter
-$ ./myapp
-Error: parameter 'config' is required
+这是一个示例应用
 
-Try './myapp --help' for more information.
+用法:
+   myapp [参数]
+   myapp [命令] [参数]
 
-# Invalid enum value
-$ ./myapp --mode invalid
-Error: invalid value for parameter mode: must be one of [dev test prod]
+选项:
+   -h, --help      获取帮助
+   -v, --version   显示版本信息
+   -c, --config    配置文件路径
 
-Try './myapp --help' for more information.
+可用命令:
+   help        获取帮助
+   config      配置管理
+
+系统命令:
+   start       启动服务
+   stop        停止服务
+   status      查看状态
+   restart     重启服务
+   install     安装服务
+   uninstall   卸载服务
+
+使用 'myapp [command] --help' 获取命令的更多信息。
 ```
 
-## Command Line Interface
+## 注意事项
 
-```bash
-# Basic commands
-./myapp install    # Install service
-./myapp start     # Start service
-./myapp stop      # Stop service
-./myapp restart   # Restart service
-./myapp status    # Show status
-./myapp uninstall # Uninstall service
+1. 服务管理功能需要适当的系统权限
+2. Windows 下某些终端可能不支持彩色输出
+3. 自定义语言包需要实现所有必需的字段
 
-# Run with parameters or install service with parameters
-./myapp --port 9090 --mode dev
-./myapp install --port 9090 --mode dev
+## 许可证
 
-# Show help
-./myapp -h
-./myapp --help
-
-# Show version
-./myapp -v
-./myapp --version
-
-# Custom commands
-./myapp version
-./myapp check
-```
-
-## Complete Example
-
-See [examples/main.go](examples/main.go) for a complete working example.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[MIT License](LICENSE)
