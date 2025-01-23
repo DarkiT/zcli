@@ -23,7 +23,7 @@ type (
 
 // Cli 是对 cobra.Command 的封装，提供更友好的命令行界面
 type Cli struct {
-	opts    *option
+	config  *Config
 	colors  *colors
 	lang    *Language
 	command *cobra.Command
@@ -31,7 +31,7 @@ type Cli struct {
 
 // NewCli 创建一个新的命令对象
 func NewCli(opts ...Option) *Cli {
-	cfg := new(option)
+	cfg := NewConfig()
 	if len(opts) > 0 {
 		for _, opt := range opts {
 			opt(cfg)
@@ -39,9 +39,9 @@ func NewCli(opts ...Option) *Cli {
 	}
 
 	cmd := &Cli{
-		opts:   cfg,
+		config: cfg,
 		colors: newColors(),
-		lang:   getServiceLanguage(cfg.Language),
+		lang:   getServiceLanguage(cfg.Basic.Language),
 		command: &cobra.Command{
 			SilenceErrors: true, // 禁止打印错误
 			SilenceUsage:  true, // 禁止打印使用说明
@@ -49,20 +49,22 @@ func NewCli(opts ...Option) *Cli {
 	}
 
 	// 如果写了服务描述则把服务描述作为命令描述
-	if cmd.opts.Description != "" {
-		cmd.command.Short = cmd.opts.Description
+	if cmd.config.Basic.Description != "" {
+		cmd.command.Short = cmd.config.Basic.Description
 	}
 
 	// 添加版本标志
-	if cmd.opts.VersionInfo != nil || cmd.opts.Version != "" {
-		// 优先使用 VersionInfo.Version，如果需要可以被 options.Version 覆盖
+	if cmd.config.Runtime.BuildInfo != nil || cmd.config.Basic.Version != "" {
+		// 优先使用 BuildInfo.Version，如果需要可以被 Basic.Version 覆盖
 		version := ""
-		if cmd.opts.VersionInfo != nil {
-			version = cmd.opts.VersionInfo.Version
+		if cmd.config.Runtime.BuildInfo != nil {
+			version = cmd.config.Runtime.BuildInfo.Version
 		}
-		if cmd.opts.Version != "" {
-			version = cmd.opts.Version                      // 允许覆盖
-			cmd.opts.VersionInfo.Version = cmd.opts.Version // 同步更新 VersionInfo
+		if cmd.config.Basic.Version != "" {
+			version = cmd.config.Basic.Version       // 允许覆盖
+			if cmd.config.Runtime.BuildInfo != nil { // 如果有 BuildInfo 则同步更新
+				cmd.config.Runtime.BuildInfo.Version = cmd.config.Basic.Version // 同步更新 BuildInfo
+			}
 		}
 
 		cmd.command.Version = version
@@ -70,7 +72,7 @@ func NewCli(opts ...Option) *Cli {
 	}
 
 	// 如果有构建信息，重写版本命令
-	if cmd.opts.VersionInfo != nil {
+	if cmd.config.Runtime.BuildInfo != nil {
 		var buf strings.Builder
 		defer buf.Reset()
 		cmd.showVersion(&buf)
@@ -78,12 +80,12 @@ func NewCli(opts ...Option) *Cli {
 	}
 
 	// 只有同时设置了 Name 和 Run 函数才初始化服务
-	if cmd.opts.Name != "" && cmd.opts.Run != nil {
+	if cmd.config.Basic.Name != "" && cmd.config.Runtime.Run != nil {
 		// 如果配置了服务名称和启动函数则初始化服务
 		cmd.initService()
 		// 如果设置了启动函数则添加默认的启动命令
 		cmd.command.Run = func(_ *cobra.Command, args []string) {
-			cmd.opts.Run()
+			cmd.config.Runtime.Run()
 		}
 	}
 

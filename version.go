@@ -10,60 +10,51 @@ import (
 
 // VersionInfo 构建信息
 type VersionInfo struct {
-	Version      string      `json:"version"`
-	GoVersion    string      `json:"goVersion"`
-	GitCommit    string      `json:"gitCommit"`
-	GitBranch    string      `json:"gitBranch"`
-	GitTag       string      `json:"gitTag"`
-	Platform     string      `json:"platform"`
-	Architecture string      `json:"architecture"`
-	Compiler     string      `json:"compiler"`
-	Debug        atomic.Bool `json:"debug"`
-	BuildTime    time.Time   `json:"buildTime"`
+	Version      string      `json:"version"`      // 版本号
+	GoVersion    string      `json:"goVersion"`    // Go版本
+	GitCommit    string      `json:"gitCommit"`    // Git提交哈希
+	GitBranch    string      `json:"gitBranch"`    // Git分支
+	GitTag       string      `json:"gitTag"`       // Git标签
+	Platform     string      `json:"platform"`     // 运行平台
+	Architecture string      `json:"architecture"` // 系统架构
+	Compiler     string      `json:"compiler"`     // 编译器
+	Debug        atomic.Bool `json:"debug"`        // 调试模式
+	BuildTime    time.Time   `json:"buildTime"`    // 构建时间
 }
 
-// SetDebug 是否开启调试模式
-func (bi *VersionInfo) SetDebug(debug bool) *VersionInfo {
-	bi.Debug.Store(debug)
-	return bi
-}
-
-// SetVersion 设置构建版本号
-func (bi *VersionInfo) SetVersion(version string) *VersionInfo {
-	bi.Version = version
-	return bi
-}
-
-// SetBuildTime 设置构建时间
-func (bi *VersionInfo) SetBuildTime(t time.Time) *VersionInfo {
-	bi.BuildTime = t
-	return bi
+// NewVersion 创建版本信息
+func NewVersion() *VersionInfo {
+	return &VersionInfo{
+		Version:      "1.0.0",
+		GoVersion:    runtime.Version(),
+		Platform:     runtime.GOOS,
+		Architecture: runtime.GOARCH,
+		Compiler:     runtime.Compiler,
+		BuildTime:    time.Now(),
+	}
 }
 
 // String 返回格式化的构建信息
-func (bi *VersionInfo) String() string {
-	// 预定义字段映射
+func (vi *VersionInfo) String() string {
 	fields := []struct {
 		name  string
 		value interface{}
 		cond  bool
 	}{
-		{"Version", bi.Version, true},
-		{"Go Version", bi.GoVersion, true},
-		{"Compiler", bi.Compiler, true},
-		{"Platform", fmt.Sprintf("%s/%s", bi.Platform, bi.Architecture), true},
-		{"Git Branch", bi.GitBranch, bi.GitBranch != ""},
-		{"Git Tag", bi.GitTag, bi.GitTag != ""},
-		{"Git Commit", bi.GitCommit, bi.GitCommit != ""},
-		{"Build Mode", map[bool]string{true: "Debug", false: "Release"}[bi.Debug.Load()], true},
-		{"Build Time", bi.BuildTime.Format(time.DateTime), !bi.BuildTime.IsZero()},
+		{"Version", vi.Version, true},
+		{"Go Version", vi.GoVersion, true},
+		{"Compiler", vi.Compiler, true},
+		{"Platform", fmt.Sprintf("%s/%s", vi.Platform, vi.Architecture), true},
+		{"Git Branch", vi.GitBranch, vi.GitBranch != ""},
+		{"Git Tag", vi.GitTag, vi.GitTag != ""},
+		{"Git Commit", vi.GitCommit, vi.GitCommit != ""},
+		{"Build Mode", map[bool]string{true: "Debug", false: "Release"}[vi.Debug.Load()], true},
+		{"Build Time", vi.BuildTime.Format(time.DateTime), !vi.BuildTime.IsZero()},
 	}
 
-	// 预分配 builder
 	var b strings.Builder
 	b.Grow(256)
 
-	// 统一格式化输出
 	for _, f := range fields {
 		if f.cond {
 			_, _ = fmt.Fprintf(&b, "%-15s %v%s", f.name+":", f.value, separator)
@@ -71,15 +62,4 @@ func (bi *VersionInfo) String() string {
 	}
 
 	return b.String()
-}
-
-// NewVersionInfo 创建构建信息
-func NewVersionInfo() *VersionInfo {
-	return &VersionInfo{
-		Version:      "1.0.0",
-		GoVersion:    runtime.Version(),
-		Platform:     runtime.GOOS,
-		Architecture: runtime.GOARCH,
-		Compiler:     runtime.Compiler,
-	}
 }

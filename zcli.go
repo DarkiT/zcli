@@ -4,15 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
-	"github.com/spf13/pflag"
-
 	"github.com/fatih/color"
-
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -36,7 +33,7 @@ func (c *Cli) addRootCommand(rootCmd *cobra.Command) {
 	c.addHelpCommand(rootCmd)
 
 	// 设置控制台颜色支持
-	if c.opts.NoColor || !isColorSupported() {
+	if c.config.Basic.NoColor || !isColorSupported() {
 		color.NoColor = true
 	}
 
@@ -52,9 +49,9 @@ func (c *Cli) addRootCommand(rootCmd *cobra.Command) {
 		cmdPath := getCommandPath(cc)
 
 		// Logo
-		if c.opts.Logo != "" && cc.Parent() == nil {
+		if c.config.Basic.Logo != "" && cc.Parent() == nil {
 			buf.WriteString(separator)
-			buf.WriteString(c.colors.Logo.Sprint(strings.TrimSpace(c.opts.Logo)))
+			buf.WriteString(c.colors.Logo.Sprint(strings.TrimSpace(c.config.Basic.Logo)))
 			// Version
 			if c.command.Version != "" {
 				buf.WriteString(c.colors.Logo.Sprintf(" %s %s", c.lang.Command.Version, strings.TrimLeft(c.command.Version, "v")))
@@ -292,10 +289,11 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 
 // showVersion 显示版本信息
 func (c *Cli) showVersion(buf *strings.Builder) {
-	if c.opts.VersionInfo != nil {
-		buf.WriteString(c.colors.Description.Sprintf(c.opts.VersionInfo.String()))
-	} else if c.opts.Version != "" {
-		buf.WriteString(c.colors.Description.Sprintf("Version: %s\n", c.opts.Version))
+	if c.config.Runtime.BuildInfo != nil {
+		buf.WriteString(c.colors.Description.Sprint(c.config.Runtime.BuildInfo.String()))
+	} else if c.config.Basic.Version != "" {
+		const versionFormat = "Version: %s\n"
+		buf.WriteString(c.colors.Description.Sprintf(versionFormat, c.config.Basic.Version))
 	}
 }
 
@@ -320,30 +318,62 @@ func wordWrap(text string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// isColorSupported 检查系统是否支持彩色输出
+// isColorSupported 检查终端是否支持彩色输出
 func isColorSupported() bool {
-	if runtime.GOOS != "windows" {
+	// 1. 首先检查是否明确禁用了颜色
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+
+	// 2. 检查是否在CI环境中
+	if os.Getenv("CI") != "" {
+		// 检查常见的CI环境
+		ciEnvs := []string{
+			"GITHUB_ACTIONS",
+			"GITLAB_CI",
+			"TRAVIS",
+			"CIRCLECI",
+			"JENKINS_URL",
+			"TEAMCITY_VERSION",
+		}
+		for _, env := range ciEnvs {
+			if os.Getenv(env) != "" {
+				return true
+			}
+		}
+	}
+
+	// 3. 检查 COLORTERM 环境变量
+	if os.Getenv("COLORTERM") != "" {
 		return true
 	}
 
-	colorSupportEnvs := []string{
-		"WT_SESSION",          // Windows Terminal
-		"TERM_PROGRAM=vscode", // VS Code terminal
-		"ConEmuANSI=ON",       // ConEmu
-		"ANSICON",             // ANSICON
-		"TERM=xterm",          // Git Bash
-		"TERM=cygwin",         // Cygwin
-		"CI",                  // CI environment
-	}
-
-	for _, env := range colorSupportEnvs {
-		if parts := strings.SplitN(env, "=", 2); len(parts) == 2 {
-			if os.Getenv(parts[0]) == parts[1] {
+	// 4. 检查终端类型
+	term := os.Getenv("TERM")
+	if term != "" {
+		colorTerms := []string{
+			"xterm",
+			"vt100",
+			"color",
+			"ansi",
+			"cygwin",
+			"linux",
+		}
+		for _, cterm := range colorTerms {
+			if strings.Contains(term, cterm) {
 				return true
 			}
-		} else if os.Getenv(env) != "" {
-			return true
 		}
+	}
+
+	// 5. 平台特定检查
+	if !isWindowsColorSupported() {
+		return false
+	}
+
+	// 6. 检查是否是标准终端
+	if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
+		return true
 	}
 
 	return false
