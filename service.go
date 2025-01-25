@@ -354,7 +354,7 @@ func (sm *sManager) initSystemService() (service.Service, error) {
 func (sm *sManager) controlSystemService(action string) (err error) {
 	if contains(service.ControlAction[:], action) {
 		if err = service.Control(sm.service, action); err != nil {
-			return fmt.Errorf("%s service failed: %w", action, err)
+			return err
 		}
 		return nil
 	}
