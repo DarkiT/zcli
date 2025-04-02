@@ -53,45 +53,57 @@ func NewCli(opts ...Option) *Cli {
 		cmd.command.Short = cmd.config.Basic.Description
 	}
 
-	// 添加版本标志
-	if cmd.config.Runtime.BuildInfo != nil || cmd.config.Basic.Version != "" {
-		// 优先使用 BuildInfo.Version，如果需要可以被 Basic.Version 覆盖
-		version := ""
-		if cmd.config.Runtime.BuildInfo != nil {
-			version = cmd.config.Runtime.BuildInfo.Version
-		}
-		if cmd.config.Basic.Version != "" {
-			version = cmd.config.Basic.Version       // 允许覆盖
-			if cmd.config.Runtime.BuildInfo != nil { // 如果有 BuildInfo 则同步更新
-				cmd.config.Runtime.BuildInfo.Version = cmd.config.Basic.Version // 同步更新 BuildInfo
-			}
-		}
+	// 设置版本信息
+	cmd.setupVersion()
 
-		cmd.command.Version = version
-		cmd.command.Flags().BoolP("version", "v", false, cmd.lang.Command.VersionDesc)
-	}
-
-	// 如果有构建信息，重写版本命令
-	if cmd.config.Runtime.BuildInfo != nil {
-		var buf strings.Builder
-		defer buf.Reset()
-		cmd.showVersion(&buf)
-		cmd.command.SetVersionTemplate(buf.String())
-	}
-
-	// 只有同时设置了 Name 和 Run 函数才初始化服务
-	if cmd.config.Basic.Name != "" && cmd.config.Runtime.Run != nil {
-		// 如果配置了服务名称和启动函数则初始化服务
-		cmd.initService()
-		// 如果设置了启动函数则添加默认的启动命令
-		cmd.command.Run = func(_ *cobra.Command, args []string) {
-			cmd.config.Runtime.Run()
-		}
-	}
+	// 配置服务（如果需要）
+	cmd.setupService()
 
 	// 添加根命令
 	cmd.addRootCommand(cmd.command)
 	return cmd
+}
+
+// setupVersion 设置版本信息
+func (c *Cli) setupVersion() {
+	// 添加版本标志
+	if c.config.Runtime.BuildInfo != nil || c.config.Basic.Version != "" {
+		// 优先使用 BuildInfo.Version，如果需要可以被 Basic.Version 覆盖
+		version := ""
+		if c.config.Runtime.BuildInfo != nil {
+			version = c.config.Runtime.BuildInfo.Version
+		}
+		if c.config.Basic.Version != "" {
+			version = c.config.Basic.Version       // 允许覆盖
+			if c.config.Runtime.BuildInfo != nil { // 如果有 BuildInfo 则同步更新
+				c.config.Runtime.BuildInfo.Version = c.config.Basic.Version // 同步更新 BuildInfo
+			}
+		}
+
+		c.command.Version = version
+		c.command.Flags().BoolP("version", "v", false, c.lang.Command.VersionDesc)
+	}
+
+	// 如果有构建信息，重写版本命令
+	if c.config.Runtime.BuildInfo != nil {
+		var buf strings.Builder
+		defer buf.Reset()
+		c.showVersion(&buf)
+		c.command.SetVersionTemplate(buf.String())
+	}
+}
+
+// setupService 设置服务相关功能
+func (c *Cli) setupService() {
+	// 只有同时设置了 Name 和 Run 函数才初始化服务
+	if c.config.Basic.Name != "" && c.config.Runtime.Run != nil {
+		// 如果配置了服务名称和启动函数则初始化服务
+		c.initService()
+		// 如果设置了启动函数则添加默认的启动命令
+		c.command.Run = func(_ *cobra.Command, args []string) {
+			c.config.Runtime.Run()
+		}
+	}
 }
 
 // 基础命令方法

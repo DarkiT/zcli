@@ -18,20 +18,15 @@ const logo = `
 ╚══════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝
 `
 
+// 全局变量用于控制服务状态
+var isRunning = true
+
 func main() {
 	workDir, _ := os.UserHomeDir()
 	app := zcli.NewBuilder().
-		WithLogo(logo).
-		WithName("demoapp").
-		WithDisplayName("演示应用").
-		WithDescription("这是一个演示应用").
-		WithLanguage("zh").
-		WithVersion("1.0.5").
-		WithGitInfo("abc123", "master", "v1.0.5").
-		WithDebug(true).
-		WithWorkDir(workDir).
-		WithEnvVar("ENV", "prod").
-		WithSystemService(run, stop).
+		WithLogo(logo).WithName("demoapp").WithDisplayName("【演示应用】").WithDescription("这是一个演示应用").WithSystemService(run, stop).
+		WithLanguage("zh").WithVersion("1.0.5").WithGitInfo("abc123", "master", "v1.0.5").
+		WithWorkDir(workDir).WithEnvVar("ENV", "prod").WithDebug(true).
 		Build()
 
 	// 添加全局标志
@@ -48,15 +43,30 @@ func main() {
 
 // 服务主函数
 func run() {
-	for {
-		fmt.Println("服务正在运行...")
-		time.Sleep(time.Second * 3)
+	slog.Info("服务已启动")
+	isRunning = true
+
+	// 创建定时器
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	// 服务主循环 - 简化为只检查isRunning标志
+	for range ticker.C {
+		if !isRunning {
+			break
+		}
+		slog.Info("服务正在运行...")
 	}
 }
 
 // 服务停止函数
 func stop() {
-	fmt.Println("服务停止中...")
+	slog.Warn("服务停止中...")
+
+	// 简单地将运行标志设置为false，通知主循环退出
+	isRunning = false
+
+	slog.Info("服务已停止")
 }
 
 // 添加配置管理命令
@@ -64,8 +74,6 @@ func addConfigCommands(app *zcli.Cli) {
 	configCmd := &zcli.Command{
 		Use:   "config",
 		Short: "配置管理",
-		// DisableFlagParsing:    true, // 禁用标志解析
-		// DisableFlagsInUseLine: true, // 在使用说明中禁用标志
 		Run: func(cmd *zcli.Command, args []string) {
 			slog.Info("配置管理", "name", cmd.Name(), "args", args)
 		},

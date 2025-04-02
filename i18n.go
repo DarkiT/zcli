@@ -14,6 +14,7 @@ type ServiceMessages struct {
 	Stop      string // 停止服务
 	Restart   string // 重启服务
 	Status    string // 查看状态
+	Run       string // 在前台运行服务
 
 	// 状态相关
 	StatusFormat string // 状态格式化字符串
@@ -27,6 +28,14 @@ type ServiceMessages struct {
 	AlreadyExists  string // 服务已存在
 	AlreadyRunning string // 服务已在运行
 	AlreadyStopped string // 服务已停止
+
+	// 错误消息
+	ErrGetStatus      string // 获取服务状态失败
+	ErrStartService   string // 启动服务失败
+	ErrStopService    string // 停止服务失败
+	ErrRestartService string // 重启服务失败
+	ErrCreateConfig   string // 创建服务配置失败
+	ErrCreateService  string // 创建服务实例失败
 }
 
 // CommandMessages 命令相关消息
@@ -78,10 +87,17 @@ type Language struct {
 
 // 预定义语言包
 var (
+	defaultLang = "zh" // 默认语言
+	languages   = map[string]*Language{
+		"zh": zhCN, // 注册中文语言包
+		"en": enUS, // 注册英文语言包
+	}
+
 	// 中文语言包
 	zhCN = &Language{
 		Service: ServiceMessages{
 			// 操作相关
+			Run:       "运行服务",
 			Install:   "安装服务",
 			Uninstall: "卸载服务",
 			Start:     "启动服务",
@@ -101,6 +117,14 @@ var (
 			AlreadyExists:  "服务已存在",
 			AlreadyRunning: "服务已在运行",
 			AlreadyStopped: "服务已停止",
+
+			// 错误消息
+			ErrGetStatus:      "获取服务状态失败",
+			ErrStartService:   "启动服务失败",
+			ErrStopService:    "停止服务失败",
+			ErrRestartService: "重启服务失败",
+			ErrCreateConfig:   "创建服务配置失败",
+			ErrCreateService:  "创建服务实例失败",
 		},
 		Command: CommandMessages{
 			Usage:   "用法",
@@ -143,6 +167,7 @@ var (
 	enUS = &Language{
 		Service: ServiceMessages{
 			// Operations
+			Run:       "Run Service",
 			Install:   "Install Service",
 			Uninstall: "Uninstall Service",
 			Start:     "Start Service",
@@ -162,6 +187,14 @@ var (
 			AlreadyExists:  "Service already exists",
 			AlreadyRunning: "Service is already running",
 			AlreadyStopped: "Service is already stopped",
+
+			// Error messages
+			ErrGetStatus:      "Failed to get service status",
+			ErrStartService:   "Failed to start service",
+			ErrStopService:    "Failed to stop service",
+			ErrRestartService: "Failed to restart service",
+			ErrCreateConfig:   "Failed to create service configuration",
+			ErrCreateService:  "Failed to create service instance",
 		},
 		Command: CommandMessages{
 			Usage:       "Usage",
@@ -190,15 +223,6 @@ var (
 			RunHelpCmd:       "Run '%s --help' for usage",
 			UnknownHelpTopic: "Unknown help topic: %v",
 		},
-	}
-)
-
-// 语言包管理
-var (
-	defaultLang = "zh" // 默认语言
-	languages   = map[string]*Language{
-		"zh": zhCN, // 注册中文语言包
-		"en": enUS, // 注册英文语言包
 	}
 )
 
@@ -260,6 +284,7 @@ func validateServiceMessages(m ServiceMessages) error {
 	fields := []struct {
 		value, name string
 	}{
+		{m.Run, "Run"},
 		{m.Install, "Install"},
 		{m.Uninstall, "Uninstall"},
 		{m.Start, "Start"},
@@ -275,6 +300,12 @@ func validateServiceMessages(m ServiceMessages) error {
 		{m.AlreadyExists, "AlreadyExists"},
 		{m.AlreadyRunning, "AlreadyRunning"},
 		{m.AlreadyStopped, "AlreadyStopped"},
+		{m.ErrGetStatus, "ErrGetStatus"},
+		{m.ErrStartService, "ErrStartService"},
+		{m.ErrStopService, "ErrStopService"},
+		{m.ErrRestartService, "ErrRestartService"},
+		{m.ErrCreateConfig, "ErrCreateConfig"},
+		{m.ErrCreateService, "ErrCreateService"},
 	}
 
 	return validateFields(fields)

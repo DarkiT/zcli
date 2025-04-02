@@ -9,3 +9,16 @@
 *.env
 *.ini
 *.json
+*.log
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar
+*.rar
+*.7z
+*.bak
+*.tmp
+*.tmp.*
+*.temp
+.specstory

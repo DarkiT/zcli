@@ -20,12 +20,13 @@ const (
 
 // 定义系统命令的固定顺序
 var systemCmdOrder = map[string]int{
-	"start":     1,
-	"stop":      2,
-	"status":    3,
-	"restart":   4,
-	"install":   5,
-	"uninstall": 6,
+	"run":       1,
+	"start":     2,
+	"stop":      3,
+	"status":    4,
+	"restart":   5,
+	"install":   6,
+	"uninstall": 7,
 }
 
 // addRootCommand 在初始化时设置语言包

@@ -7,10 +7,18 @@ type Builder struct {
 }
 
 // NewBuilder 创建CLI构建器
-func NewBuilder() *Builder {
-	return &Builder{
+// lang参数可选，指定默认语言
+func NewBuilder(lang ...string) *Builder {
+	b := &Builder{
 		config: NewConfig(),
 	}
+
+	// 如果提供了语言参数，设置默认语言
+	if len(lang) > 0 && lang[0] != "" {
+		b.WithLanguage(lang[0])
+	}
+
+	return b
 }
 
 // WithName 设置名称
