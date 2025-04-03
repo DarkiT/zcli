@@ -18,9 +18,6 @@ const logo = `
 ╚══════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝
 `
 
-// 全局变量用于控制服务状态
-var isRunning = true
-
 func main() {
 	workDir, _ := os.UserHomeDir()
 	app := zcli.NewBuilder().
@@ -44,7 +41,6 @@ func main() {
 // 服务主函数
 func run() {
 	slog.Info("服务已启动")
-	isRunning = true
 
 	// 创建定时器
 	ticker := time.NewTicker(time.Second)
@@ -52,20 +48,12 @@ func run() {
 
 	// 服务主循环 - 简化为只检查isRunning标志
 	for range ticker.C {
-		if !isRunning {
-			break
-		}
 		slog.Info("服务正在运行...")
 	}
 }
 
 // 服务停止函数
 func stop() {
-	slog.Warn("服务停止中...")
-
-	// 简单地将运行标志设置为false，通知主循环退出
-	isRunning = false
-
 	slog.Info("服务已停止")
 }
 

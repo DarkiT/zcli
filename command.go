@@ -99,10 +99,6 @@ func (c *Cli) setupService() {
 	if c.config.Basic.Name != "" && c.config.Runtime.Run != nil {
 		// 如果配置了服务名称和启动函数则初始化服务
 		c.initService()
-		// 如果设置了启动函数则添加默认的启动命令
-		c.command.Run = func(_ *cobra.Command, args []string) {
-			c.config.Runtime.Run()
-		}
 	}
 }
 

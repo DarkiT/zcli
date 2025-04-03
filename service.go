@@ -49,15 +49,15 @@ func (c *Cli) initService() {
 // setupSignalHandler 设置信号处理器
 func (c *Cli) setupSignalHandler(sm *sManager) {
 	<-c.config.ctx.Done()
-	_, _ = c.colors.Warning.Println(c.lang.Service.ReceiveSignal)
 
-	// 确保服务停止
-	if sm != nil && sm.running.Load() {
+	// 确保服务停止（增加对 stopExecuted 的检查，避免重复调用）
+	if sm != nil && sm.running.Load() && !sm.stopExecuted.Load() {
 		_ = sm.Stop(sm.service)
+	} else if sm != nil && sm.stopExecuted.Load() {
+		// 如果 Stop 已经被调用过，则跳过重复调用，仅执行用户定义的停止函数
+		// 直接调用用户注册的停止函数，确保它们被执行
+		c.executeStopFunctions()
 	}
-
-	// 直接调用用户注册的停止函数
-	c.executeStopFunctions()
 
 	// 如果服务没有及时退出，强制结束进程
 	sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(c.lang.Service.ServiceStopTimeout, 15), 1)
@@ -145,11 +145,10 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 		<-ctx.Done()
 		// 如果服务正在运行且尚未执行过停止操作，执行停止函数
 		if sm.running.Load() && !sm.stopExecuted.Load() {
-			//_, _ = cmd.colors.Debug.Println("上下文取消，触发服务停止")
 			_ = sm.Stop(sm.service)
 
 			// 确保退出应用程序，防止卡死
-			sm.ExitWithTimeout(15*time.Second, "服务未能在15秒内正常退出, 强制结束进程", 1)
+			sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(cmd.lang.Service.ServiceStopTimeout, 15), 1)
 		}
 	}()
 
@@ -163,7 +162,7 @@ func (sm *sManager) Start(s service.Service) error {
 
 	// 防止重复启动
 	if sm.running.Load() {
-		return fmt.Errorf("服务已在运行中")
+		return fmt.Errorf(sm.commands.lang.Service.ServiceAlreadyRunning)
 	}
 
 	// 确保退出通道已关闭
@@ -190,24 +189,21 @@ func (sm *sManager) Start(s service.Service) error {
 		// 监听退出信号
 		select {
 		case <-sm.exitChan:
-			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExitChannelSignal)
+			// 收到退出通道信号
 		case <-sm.ctx.Done():
-			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ContextCancelSignal)
+			// 收到上下文取消信号
 			// 如果是由上下文取消触发，主动关闭退出通道
-			// 先检查通道是否已关闭
 			select {
 			case <-sm.exitChan:
 				// 通道已关闭，不需要操作
 			default:
-				// 发送退出信号
+				// 关闭退出通道
 				close(sm.exitChan)
 			}
 		}
 
-		// 如果是交互式模式，自动停止
-		// 但要检查是否已经执行过停止操作
+		// 如果是交互式模式，自动停止服务
 		if service.Interactive() && !sm.stopExecuted.Load() {
-			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.InteractiveAutoStop)
 			_ = sm.Stop(s)
 		}
 	}()
@@ -218,9 +214,8 @@ func (sm *sManager) Start(s service.Service) error {
 // Stop 实现 service.Interface 接口，停止服务
 func (sm *sManager) Stop(s service.Service) error {
 	// 使用原子操作检查是否已经执行过停止操作
+	// 如果已经执行过，直接返回，不重复执行
 	if sm.stopExecuted.Swap(true) {
-		// 如果已经执行过，只输出调试信息并返回
-		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.StopMethodCalled)
 		return nil
 	}
 
@@ -229,35 +224,26 @@ func (sm *sManager) Stop(s service.Service) error {
 		return nil
 	}
 
-	_, _ = sm.commands.colors.Info.Println(sm.commands.lang.Service.ServiceStopping)
-
 	// 执行用户定义的停止函数 - 先执行这一步确保用户的停止逻辑被执行
 	if sm.commands.config.Runtime.Stop != nil {
 		for _, stop := range sm.commands.config.Runtime.Stop {
 			if stop != nil {
-				_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExecutingStopFunction)
 				stop()
 			}
 		}
 	}
 
-	// 检查退出通道是否已关闭
+	// 检查退出通道是否已关闭，如未关闭则关闭
 	select {
 	case <-sm.exitChan:
-		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExitChannelClosed)
+		// 通道已关闭，不需要操作
 	default:
 		// 发送退出信号
 		close(sm.exitChan)
-		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ClosedExitChannel)
 	}
 
 	// 标记为非运行状态
 	sm.running.Store(false)
-
-	// 确保应用程序能够退出，使用短时延迟确认
-	time.AfterFunc(200*time.Millisecond, func() {
-		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.CheckServiceStopped)
-	})
 
 	return nil
 }
@@ -282,7 +268,7 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 	// 获取可执行文件路径
 	execPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("获取可执行文件路径失败: %v", err)
+		return nil, fmt.Errorf(sm.commands.lang.Service.ErrGetExecPath, err)
 	}
 	if config.Executable == "" {
 		config.Executable = execPath
@@ -296,20 +282,20 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 	// 非Windows系统检查文件权限
 	if runtime.GOOS != "windows" {
 		// 检查可执行文件路径权限
-		if err := checkPermissions(config.Executable, 0o500); err != nil {
-			return nil, fmt.Errorf("可执行文件 %s 权限检查失败: %v", config.Executable, err)
+		if err := checkPermissions(config.Executable, 0o500, sm.commands.lang); err != nil {
+			return nil, fmt.Errorf(sm.commands.lang.Service.ErrExecFilePermission, config.Executable, err)
 		}
 	}
 
 	// 检查工作目录权限
-	if err := checkPermissions(config.WorkingDirectory, 0o700); err != nil {
-		return nil, fmt.Errorf("工作目录 %s 权限检查失败: %v", config.WorkingDirectory, err)
+	if err := checkPermissions(config.WorkingDirectory, 0o700, sm.commands.lang); err != nil {
+		return nil, fmt.Errorf(sm.commands.lang.Service.ErrWorkDirPermission, config.WorkingDirectory, err)
 	}
 
 	// 检查 ChRoot 目录权限（如果启用）
 	if config.ChRoot != "" {
-		if err := checkPermissions(config.ChRoot, 0o700); err != nil {
-			return nil, fmt.Errorf("chroot 目录 %s 权限检查失败: %v", config.ChRoot, err)
+		if err := checkPermissions(config.ChRoot, 0o700, sm.commands.lang); err != nil {
+			return nil, fmt.Errorf(sm.commands.lang.Service.ErrChrootPermission, config.ChRoot, err)
 		}
 	}
 
@@ -332,7 +318,7 @@ func (sm *sManager) runRun(_ *cobra.Command, args []string) {
 		sm.config.Arguments = serviceArgs
 		svc, err := service.New(sm, sm.config)
 		if err != nil {
-			_, _ = sm.commands.colors.Error.Printf("创建服务实例失败: %v\n", err)
+			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.ErrCreateService+": %v\n", err)
 			return
 		}
 		sm.service = svc
@@ -349,40 +335,65 @@ func (sm *sManager) runRun(_ *cobra.Command, args []string) {
 		defer close(runDone)
 		// 启动服务
 		if err := sm.service.Run(); err != nil {
-			_, _ = sm.commands.colors.Error.Printf("运行服务失败: %v\n", err)
+			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.ErrRunService+": %v\n", err)
 		}
 	}()
 
+	// 使用单独的函数处理服务结束和超时逻辑，使代码更清晰
+	sm.waitForServiceCompletion(runDone)
+}
+
+// waitForServiceCompletion 等待服务完成或响应信号
+func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 	// 等待服务退出或收到信号
 	select {
 	case <-runDone:
-		_, _ = sm.commands.colors.Success.Println("服务已正常退出")
-	case <-sm.ctx.Done():
-		_, _ = sm.commands.colors.Debug.Println("接收到终止信号，等待服务退出...")
+		// 服务自行退出，无需额外处理
+		return
 
-		// 等待服务退出，但最多等待3秒
+	case <-sm.ctx.Done():
+		// 收到取消信号，尝试优雅停止
+
+		// 使用超时机制等待服务退出
 		select {
 		case <-runDone:
-			_, _ = sm.commands.colors.Success.Println("服务已应信号退出")
+			// 服务响应信号成功退出
+			return
+
 		case <-time.After(3 * time.Second):
-			if sm.commands.config.Runtime.Stop != nil {
-				for _, stop := range sm.commands.config.Runtime.Stop {
-					if stop != nil {
-						_, _ = sm.commands.colors.Debug.Println("等待超时，再次调用停止函数")
-						stop()
-					}
-				}
+			// 超时3秒，尝试调用停止函数
+			if !sm.stopExecuted.Load() {
+				_, _ = sm.commands.colors.Warning.Println(sm.commands.lang.Service.StopTimeoutReinvoke)
+				// 如果尚未执行过，则调用 Stop 方法
+				_ = sm.Stop(sm.service)
+			} else {
+				// 如果已经执行过 Stop，则直接调用停止函数
+				sm.callStopFunctions()
 			}
 
-			// 继续等待一段时间
+			// 再等待2秒
 			select {
 			case <-runDone:
-				_, _ = sm.commands.colors.Success.Println("服务在额外调用stop后退出")
+				// 在额外调用stop后成功退出
+				return
+
 			case <-time.After(2 * time.Second):
-				_, _ = sm.commands.colors.Warning.Println("服务未能在总计5秒内退出，标记为已停止")
-				// 确保服务已标记为停止状态
+				// 总计5秒后仍未退出，标记为已停止
+				_, _ = sm.commands.colors.Warning.Println(sm.commands.lang.Service.ServiceStopTimedOut)
 				sm.running.Store(false)
 				sm.stopExecuted.Store(true)
+				return
+			}
+		}
+	}
+}
+
+// callStopFunctions 调用用户注册的所有停止函数
+func (sm *sManager) callStopFunctions() {
+	if sm.commands.config.Runtime.Stop != nil {
+		for _, stop := range sm.commands.config.Runtime.Stop {
+			if stop != nil {
+				stop()
 			}
 		}
 	}
@@ -415,7 +426,7 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 		// 重新创建服务实例
 		svc, err := service.New(sm, sm.config)
 		if err != nil {
-			return fmt.Errorf("创建服务实例失败: %v", err)
+			return fmt.Errorf(sm.commands.lang.Service.ErrCreateService+": %v", err)
 		}
 		sm.service = svc
 
@@ -428,7 +439,7 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 
 		// 安装服务
 		if err = sm.service.Install(); err != nil {
-			return fmt.Errorf("安装服务失败: %v", err)
+			return fmt.Errorf(sm.commands.lang.Service.ErrInstallService, err)
 		}
 
 		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
@@ -449,7 +460,7 @@ func (sm *sManager) newUninstallCmd() *cobra.Command {
 
 		// 卸载服务
 		if err := sm.service.Uninstall(); err != nil {
-			return fmt.Errorf("卸载服务失败: %v", err)
+			return fmt.Errorf(sm.commands.lang.Service.ErrUninstallService, err)
 		}
 
 		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
@@ -530,7 +541,7 @@ func (sm *sManager) newRestartCmd() *cobra.Command {
 		}
 
 		if status == service.StatusUnknown {
-			return fmt.Errorf("服务 %s 未安装", sm.commands.config.Basic.Name)
+			return fmt.Errorf(sm.commands.lang.Service.ErrServiceNotFound, sm.commands.config.Basic.Name)
 		}
 
 		// 先停止服务
@@ -604,20 +615,20 @@ func (sm *sManager) ExitWithTimeout(timeout time.Duration, debugMsg string, exit
 }
 
 // checkPermissions 检查文件或目录的权限
-func checkPermissions(path string, requiredPerm os.FileMode) error {
+func checkPermissions(path string, requiredPerm os.FileMode, lang *Language) error {
 	// 检查路径是否存在
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("路径不存在: %s", path)
+			return fmt.Errorf(lang.Service.ErrPathNotExist, path)
 		}
-		return fmt.Errorf("获取路径信息失败: %v", err)
+		return fmt.Errorf(lang.Service.ErrGetPathInfo, err)
 	}
 
 	// 检查是否有足够的权限
 	perm := fileInfo.Mode() & os.ModePerm
 	if perm&requiredPerm != requiredPerm {
-		return fmt.Errorf("权限不足: 需要 %v, 当前 %v", requiredPerm, perm)
+		return fmt.Errorf(lang.Service.ErrInsufficientPerm, requiredPerm, perm)
 	}
 
 	return nil

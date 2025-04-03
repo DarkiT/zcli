@@ -30,37 +30,39 @@ type ServiceMessages struct {
 	AlreadyStopped string // 服务已停止
 
 	// 错误消息
-	ErrGetStatus      string // 获取服务状态失败
-	ErrStartService   string // 启动服务失败
-	ErrStopService    string // 停止服务失败
-	ErrRestartService string // 重启服务失败
-	ErrCreateConfig   string // 创建服务配置失败
-	ErrCreateService  string // 创建服务实例失败
+	ErrGetStatus          string // 获取服务状态失败
+	ErrStartService       string // 启动服务失败
+	ErrStopService        string // 停止服务失败
+	ErrRestartService     string // 重启服务失败
+	ErrCreateConfig       string // 创建服务配置失败
+	ErrCreateService      string // 创建服务实例失败
+	ErrRunService         string // 运行服务失败
+	ErrPathNotExist       string // 路径不存在
+	ErrGetPathInfo        string // 获取路径信息失败
+	ErrInsufficientPerm   string // 权限不足
+	ErrGetExecPath        string // 获取可执行文件路径失败
+	ErrExecFilePermission string // 可执行文件权限检查失败
+	ErrWorkDirPermission  string // 工作目录权限检查失败
+	ErrChrootPermission   string // chroot目录权限检查失败
+	ErrInstallService     string // 安装服务失败
+	ErrUninstallService   string // 卸载服务失败
+	ErrServiceNotFound    string // 服务未找到
 
 	// 调试和信息消息
-	ReceiveSignal         string // 接收到系统信号
 	ServiceStopTimeout    string // 服务未能在指定时间内退出
-	StopMethodCalled      string // Stop方法已被调用
-	ServiceStopping       string // 服务正在停止
-	ExecutingStopFunction string // 执行停止函数
-	ExitChannelClosed     string // 退出通道已关闭
-	ClosedExitChannel     string // 已关闭退出通道
-	CheckServiceStopped   string // 检查服务是否已停止
-	ExitChannelSignal     string // 服务收到退出通道信号
-	ContextCancelSignal   string // 服务收到上下文取消信号
-	InteractiveAutoStop   string // 交互模式下自动停止
+	StopTimeoutReinvoke   string // 等待超时，再次调用停止函数
+	ServiceStopTimedOut   string // 服务未能在规定时间内退出
+	ServiceAlreadyRunning string // 服务已在运行中
 }
 
 // CommandMessages 命令相关消息
 type CommandMessages struct {
 	// 基础命令信息
 	Usage   string // 用法说明
-	Aliases string // 命令别名
 	Command string // 命令
 
 	// 命令选项相关
-	Flags       string // 命令参数
-	GlobalFlags string // 全局参数
+	Flags string // 命令参数
 
 	// UI 相关文本
 	Options      string // 选项标题
@@ -84,10 +86,6 @@ type CommandMessages struct {
 // ErrorMessages 错误相关消息
 type ErrorMessages struct {
 	Prefix           string // 错误前缀
-	InvalidFlag      string // 无效的选项
-	FlagNeedsArg     string // 选项需要参数
-	InvalidArgument  string // 无效的参数
-	RunHelpCmd       string // 运行帮助命令提示
 	UnknownHelpTopic string // 未知帮助主题
 }
 
@@ -132,34 +130,36 @@ var (
 			AlreadyStopped: "服务已停止",
 
 			// 错误消息
-			ErrGetStatus:      "获取服务状态失败",
-			ErrStartService:   "启动服务失败",
-			ErrStopService:    "停止服务失败",
-			ErrRestartService: "重启服务失败",
-			ErrCreateConfig:   "创建服务配置失败",
-			ErrCreateService:  "创建服务实例失败",
+			ErrGetStatus:          "获取服务状态失败",
+			ErrStartService:       "启动服务失败",
+			ErrStopService:        "停止服务失败",
+			ErrRestartService:     "重启服务失败",
+			ErrCreateConfig:       "创建服务配置失败",
+			ErrCreateService:      "创建服务实例失败",
+			ErrRunService:         "运行服务失败",
+			ErrPathNotExist:       "路径不存在: %s",
+			ErrGetPathInfo:        "获取路径信息失败: %v",
+			ErrInsufficientPerm:   "权限不足: 需要 %v, 当前 %v",
+			ErrGetExecPath:        "获取可执行文件路径失败: %v",
+			ErrExecFilePermission: "可执行文件 %s 权限检查失败: %v",
+			ErrWorkDirPermission:  "工作目录 %s 权限检查失败: %v",
+			ErrChrootPermission:   "chroot 目录 %s 权限检查失败: %v",
+			ErrInstallService:     "安装服务失败: %v",
+			ErrUninstallService:   "卸载服务失败: %v",
+			ErrServiceNotFound:    "服务 %s 未安装",
 
 			// 调试和信息消息
-			ReceiveSignal:         "接收到系统信号，准备退出程序",
 			ServiceStopTimeout:    "服务未能在%d秒内正常退出，强制结束进程",
-			StopMethodCalled:      "Stop方法已被调用过，跳过重复执行",
-			ServiceStopping:       "服务正在停止...",
-			ExecutingStopFunction: "执行用户定义的停止函数",
-			ExitChannelClosed:     "退出通道已经关闭",
-			ClosedExitChannel:     "已关闭退出通道",
-			CheckServiceStopped:   "检查服务是否已停止",
-			ExitChannelSignal:     "服务收到退出通道信号",
-			ContextCancelSignal:   "服务收到上下文取消信号",
-			InteractiveAutoStop:   "交互模式下自动停止服务",
+			StopTimeoutReinvoke:   "等待超时，再次调用停止函数",
+			ServiceStopTimedOut:   "服务未能在规定时间内退出，标记为已停止",
+			ServiceAlreadyRunning: "服务已在运行中",
 		},
 		Command: CommandMessages{
 			Usage:   "用法",
-			Aliases: "别名",
 			Command: "命令",
 
 			// 命令选项相关
-			Flags:       "参数",
-			GlobalFlags: "全局参数",
+			Flags: "参数",
 
 			// UI 相关文本
 			Options:      "选项",
@@ -181,10 +181,6 @@ var (
 		},
 		Error: ErrorMessages{
 			Prefix:           "错误: ",
-			InvalidFlag:      "无效的选项: ",
-			FlagNeedsArg:     "选项需要参数: ",
-			InvalidArgument:  "无效的参数: ",
-			RunHelpCmd:       "运行 '%s --help' 获取帮助",
 			UnknownHelpTopic: "未知的帮助主题: %v",
 		},
 	}
@@ -215,51 +211,55 @@ var (
 			AlreadyStopped: "Service is already stopped",
 
 			// Error messages
-			ErrGetStatus:      "Failed to get service status",
-			ErrStartService:   "Failed to start service",
-			ErrStopService:    "Failed to stop service",
-			ErrRestartService: "Failed to restart service",
-			ErrCreateConfig:   "Failed to create service configuration",
-			ErrCreateService:  "Failed to create service instance",
+			ErrGetStatus:          "Failed to get service status",
+			ErrStartService:       "Failed to start service",
+			ErrStopService:        "Failed to stop service",
+			ErrRestartService:     "Failed to restart service",
+			ErrCreateConfig:       "Failed to create service configuration",
+			ErrCreateService:      "Failed to create service instance",
+			ErrRunService:         "Failed to run service",
+			ErrPathNotExist:       "Path does not exist: %s",
+			ErrGetPathInfo:        "Failed to get path information: %v",
+			ErrInsufficientPerm:   "Insufficient permissions: required %v, current %v",
+			ErrGetExecPath:        "Failed to get executable path: %v",
+			ErrExecFilePermission: "Executable file %s permission check failed: %v",
+			ErrWorkDirPermission:  "Working directory %s permission check failed: %v",
+			ErrChrootPermission:   "Chroot directory %s permission check failed: %v",
+			ErrInstallService:     "Failed to install service: %v",
+			ErrUninstallService:   "Failed to uninstall service: %v",
+			ErrServiceNotFound:    "Service %s is not installed",
 
 			// Debug and info messages
-			ReceiveSignal:         "Received system signal, preparing to exit",
 			ServiceStopTimeout:    "Service failed to exit within %d seconds, force terminating process",
-			StopMethodCalled:      "Stop method has already been called, skipping repeated execution",
-			ServiceStopping:       "Service is stopping...",
-			ExecutingStopFunction: "Executing user-defined stop function",
-			ExitChannelClosed:     "Exit channel is already closed",
-			ClosedExitChannel:     "Closed exit channel",
-			CheckServiceStopped:   "Checking if service has stopped",
-			ExitChannelSignal:     "Service received exit channel signal",
-			ContextCancelSignal:   "Service received context cancellation signal",
-			InteractiveAutoStop:   "Auto-stopping service in interactive mode",
+			StopTimeoutReinvoke:   "Timeout waiting, calling stop functions again",
+			ServiceStopTimedOut:   "Service failed to exit within timeout period, marked as stopped",
+			ServiceAlreadyRunning: "Service is already running",
 		},
 		Command: CommandMessages{
-			Usage:       "Usage",
-			Aliases:     "Aliases",
-			Command:     "Command",
-			Flags:       "Flags",
-			GlobalFlags: "Global Flags",
+			Usage:   "Usage",
+			Command: "Command",
+			Flags:   "Flags",
 
 			// UI 相关文本
-			Options:           "Options",
-			DefaultValue:      "(default: %s)",
-			Examples:          "Examples",
-			HelpUsage:         "Use '%s [command] --help' for more information about a command.",
+			Options:      "Options",
+			DefaultValue: "(default: %s)",
+			Examples:     "Examples",
+			HelpUsage:    "Use '%s [command] --help' for more information about a command.",
+
+			// 命令类型
 			AvailableCommands: "Available Commands",
 			SystemCommands:    "System Commands",
-			HelpCommand:       "Help",
-			HelpDesc:          "Help about any command",
-			Version:           "Ver",
-			VersionDesc:       "Show version information",
+
+			// 帮助相关
+			HelpCommand: "Help",
+			HelpDesc:    "Help about any command",
+
+			// 版本相关
+			Version:     "Ver",
+			VersionDesc: "Show version information",
 		},
 		Error: ErrorMessages{
 			Prefix:           "Error: ",
-			InvalidFlag:      "Invalid flag: ",
-			FlagNeedsArg:     "Flag needs an argument: ",
-			InvalidArgument:  "Invalid argument: ",
-			RunHelpCmd:       "Run '%s --help' for usage",
 			UnknownHelpTopic: "Unknown help topic: %v",
 		},
 	}
@@ -345,17 +345,21 @@ func validateServiceMessages(m ServiceMessages) error {
 		{m.ErrRestartService, "ErrRestartService"},
 		{m.ErrCreateConfig, "ErrCreateConfig"},
 		{m.ErrCreateService, "ErrCreateService"},
-		{m.ReceiveSignal, "ReceiveSignal"},
+		{m.ErrRunService, "ErrRunService"},
+		{m.ErrPathNotExist, "ErrPathNotExist"},
+		{m.ErrGetPathInfo, "ErrGetPathInfo"},
+		{m.ErrInsufficientPerm, "ErrInsufficientPerm"},
+		{m.ErrGetExecPath, "ErrGetExecPath"},
+		{m.ErrExecFilePermission, "ErrExecFilePermission"},
+		{m.ErrWorkDirPermission, "ErrWorkDirPermission"},
+		{m.ErrChrootPermission, "ErrChrootPermission"},
+		{m.ErrInstallService, "ErrInstallService"},
+		{m.ErrUninstallService, "ErrUninstallService"},
+		{m.ErrServiceNotFound, "ErrServiceNotFound"},
 		{m.ServiceStopTimeout, "ServiceStopTimeout"},
-		{m.StopMethodCalled, "StopMethodCalled"},
-		{m.ServiceStopping, "ServiceStopping"},
-		{m.ExecutingStopFunction, "ExecutingStopFunction"},
-		{m.ExitChannelClosed, "ExitChannelClosed"},
-		{m.ClosedExitChannel, "ClosedExitChannel"},
-		{m.CheckServiceStopped, "CheckServiceStopped"},
-		{m.ExitChannelSignal, "ExitChannelSignal"},
-		{m.ContextCancelSignal, "ContextCancelSignal"},
-		{m.InteractiveAutoStop, "InteractiveAutoStop"},
+		{m.StopTimeoutReinvoke, "StopTimeoutReinvoke"},
+		{m.ServiceStopTimedOut, "ServiceStopTimedOut"},
+		{m.ServiceAlreadyRunning, "ServiceAlreadyRunning"},
 	}
 
 	return validateFields(fields)
@@ -367,10 +371,8 @@ func validateCommandMessages(m CommandMessages) error {
 		value, name string
 	}{
 		{m.Usage, "Usage"},
-		{m.Aliases, "Aliases"},
 		{m.Command, "Command"},
 		{m.Flags, "Flags"},
-		{m.GlobalFlags, "GlobalFlags"},
 		{m.Options, "Options"},
 		{m.DefaultValue, "DefaultValue"},
 		{m.Examples, "Examples"},
@@ -392,10 +394,6 @@ func validateErrorMessages(m ErrorMessages) error {
 		value, name string
 	}{
 		{m.Prefix, "Prefix"},
-		{m.InvalidFlag, "InvalidFlag"},
-		{m.FlagNeedsArg, "FlagNeedsArg"},
-		{m.InvalidArgument, "InvalidArgument"},
-		{m.RunHelpCmd, "RunHelpCmd"},
 		{m.UnknownHelpTopic, "UnknownHelpTopic"},
 	}
 
