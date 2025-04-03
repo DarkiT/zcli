@@ -1,5 +1,7 @@
 package zcli
 
+import "context"
+
 // Basic 基础配置
 type Basic struct {
 	Name        string // 服务名称
@@ -32,9 +34,10 @@ type Runtime struct {
 
 // Config 统一配置结构
 type Config struct {
-	Basic   *Basic   // 基础配置
-	Service *Service // 服务配置
-	Runtime *Runtime // 运行时配置
+	Basic   *Basic          // 基础配置
+	Service *Service        // 服务配置
+	Runtime *Runtime        // 运行时配置
+	ctx     context.Context // 上下文
 }
 
 // Option CLI选项函数
@@ -59,5 +62,6 @@ func NewConfig() *Config {
 			Options: make(map[string]interface{}),
 		},
 		Runtime: &Runtime{},
+		ctx:     context.Background(),
 	}
 }

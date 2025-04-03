@@ -18,19 +18,19 @@ import (
 
 // initService 初始化服务
 func (c *Cli) initService() {
-	// 检查是否设置了服务运行函数
-	if c.config.Runtime.Run == nil {
-		// 未设置服务运行函数，跳过服务命令初始化
-		return
-	}
-
 	// 创建带信号处理的上下文
 	ctx, cancel := signal.NotifyContext(
-		context.Background(),
+		c.config.ctx,    // 使用用户配置的上下文，而不是直接使用background
 		syscall.SIGINT,  // Ctrl+C
 		syscall.SIGTERM, // 终止信号
 		syscall.SIGQUIT, // 退出信号
 	)
+	c.config.ctx = ctx
+
+	// 检查是否设置了服务运行函数
+	if c.config.Runtime.Run == nil {
+		return
+	}
 
 	// 创建服务管理器
 	sm, err := newServiceManager(c, ctx, cancel)
@@ -40,32 +40,27 @@ func (c *Cli) initService() {
 	}
 
 	// 设置信号处理
-	c.setupSignalHandler(ctx, sm)
+	go c.setupSignalHandler(sm)
 
 	// 添加服务命令并配置根命令运行函数
 	c.addServiceCommands(sm)
 }
 
 // setupSignalHandler 设置信号处理器
-func (c *Cli) setupSignalHandler(ctx context.Context, sm *sManager) {
-	go func() {
-		<-ctx.Done()
-		//_, _ = c.colors.Debug.Println("接收到系统信号，准备退出程序")
+func (c *Cli) setupSignalHandler(sm *sManager) {
+	<-c.config.ctx.Done()
+	_, _ = c.colors.Warning.Println(c.lang.Service.ReceiveSignal)
 
-		// 确保服务停止
-		if sm != nil && sm.running.Load() {
-			_ = sm.Stop(sm.service)
-		}
+	// 确保服务停止
+	if sm != nil && sm.running.Load() {
+		_ = sm.Stop(sm.service)
+	}
 
-		// 直接调用用户注册的停止函数（双重保障）
-		c.executeStopFunctions()
+	// 直接调用用户注册的停止函数
+	c.executeStopFunctions()
 
-		// 如果服务没有及时退出，强制结束进程
-		time.AfterFunc(15*time.Second, func() {
-			_, _ = c.colors.Error.Println("服务未能在15秒内正常退出，强制结束进程")
-			os.Exit(0) // 使用0作为退出码，因为这是预期中的退出
-		})
-	}()
+	// 如果服务没有及时退出，强制结束进程
+	sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(c.lang.Service.ServiceStopTimeout, 15), 1)
 }
 
 // executeStopFunctions 执行所有已注册的停止函数
@@ -73,7 +68,6 @@ func (c *Cli) executeStopFunctions() {
 	if c.config.Runtime.Stop != nil {
 		for _, stop := range c.config.Runtime.Stop {
 			if stop != nil {
-				//_, _ = c.colors.Debug.Println("直接调用用户停止函数")
 				stop()
 			}
 		}
@@ -155,10 +149,7 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 			_ = sm.Stop(sm.service)
 
 			// 确保退出应用程序，防止卡死
-			time.AfterFunc(15*time.Second, func() {
-				_, _ = cmd.colors.Debug.Println("强制结束进程")
-				os.Exit(0)
-			})
+			sm.ExitWithTimeout(15*time.Second, "服务未能在15秒内正常退出, 强制结束进程", 1)
 		}
 	}()
 
@@ -199,9 +190,9 @@ func (sm *sManager) Start(s service.Service) error {
 		// 监听退出信号
 		select {
 		case <-sm.exitChan:
-			//_, _ = sm.commands.colors.Debug.Println("服务收到退出通道信号")
+			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExitChannelSignal)
 		case <-sm.ctx.Done():
-			//_, _ = sm.commands.colors.Debug.Println("服务收到上下文取消信号")
+			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ContextCancelSignal)
 			// 如果是由上下文取消触发，主动关闭退出通道
 			// 先检查通道是否已关闭
 			select {
@@ -216,7 +207,7 @@ func (sm *sManager) Start(s service.Service) error {
 		// 如果是交互式模式，自动停止
 		// 但要检查是否已经执行过停止操作
 		if service.Interactive() && !sm.stopExecuted.Load() {
-			_, _ = sm.commands.colors.Debug.Println("交互模式下自动停止服务")
+			_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.InteractiveAutoStop)
 			_ = sm.Stop(s)
 		}
 	}()
@@ -229,7 +220,7 @@ func (sm *sManager) Stop(s service.Service) error {
 	// 使用原子操作检查是否已经执行过停止操作
 	if sm.stopExecuted.Swap(true) {
 		// 如果已经执行过，只输出调试信息并返回
-		//_, _ = sm.commands.colors.Debug.Println("Stop方法已被调用过，跳过重复执行")
+		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.StopMethodCalled)
 		return nil
 	}
 
@@ -238,13 +229,13 @@ func (sm *sManager) Stop(s service.Service) error {
 		return nil
 	}
 
-	//_, _ = sm.commands.colors.Info.Println("服务正在停止...")
+	_, _ = sm.commands.colors.Info.Println(sm.commands.lang.Service.ServiceStopping)
 
 	// 执行用户定义的停止函数 - 先执行这一步确保用户的停止逻辑被执行
 	if sm.commands.config.Runtime.Stop != nil {
 		for _, stop := range sm.commands.config.Runtime.Stop {
 			if stop != nil {
-				//_, _ = sm.commands.colors.Debug.Println("执行用户定义的停止函数")
+				_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExecutingStopFunction)
 				stop()
 			}
 		}
@@ -253,11 +244,11 @@ func (sm *sManager) Stop(s service.Service) error {
 	// 检查退出通道是否已关闭
 	select {
 	case <-sm.exitChan:
-		//_, _ = sm.commands.colors.Debug.Println("退出通道已经关闭")
+		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ExitChannelClosed)
 	default:
 		// 发送退出信号
 		close(sm.exitChan)
-		//_, _ = sm.commands.colors.Debug.Println("已关闭退出通道")
+		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.ClosedExitChannel)
 	}
 
 	// 标记为非运行状态
@@ -265,10 +256,9 @@ func (sm *sManager) Stop(s service.Service) error {
 
 	// 确保应用程序能够退出，使用短时延迟确认
 	time.AfterFunc(200*time.Millisecond, func() {
-		_, _ = sm.commands.colors.Debug.Println("检查服务是否已停止")
+		_, _ = sm.commands.colors.Debug.Println(sm.commands.lang.Service.CheckServiceStopped)
 	})
 
-	//_, _ = sm.commands.colors.Success.Println("服务已停止")
 	return nil
 }
 
@@ -597,6 +587,20 @@ func (sm *sManager) newRunCmd() *cobra.Command {
 		sm.runRun(cmd, args)
 	}
 	return cmd
+}
+
+// ExitWithTimeout 设置一个超时强制退出机制
+// 参数说明：
+//   - timeout: 超时时间（如 15*time.Second）
+//   - debugMsg: 退出前的调试信息（可选）
+//   - exitCode: 退出状态码（默认0）
+func (sm *sManager) ExitWithTimeout(timeout time.Duration, debugMsg string, exitCode int) {
+	time.AfterFunc(timeout, func() {
+		if debugMsg != "" {
+			_, _ = sm.commands.colors.Error.Println(debugMsg)
+		}
+		os.Exit(exitCode)
+	})
 }
 
 // checkPermissions 检查文件或目录的权限

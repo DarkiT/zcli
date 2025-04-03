@@ -36,6 +36,19 @@ type ServiceMessages struct {
 	ErrRestartService string // 重启服务失败
 	ErrCreateConfig   string // 创建服务配置失败
 	ErrCreateService  string // 创建服务实例失败
+
+	// 调试和信息消息
+	ReceiveSignal         string // 接收到系统信号
+	ServiceStopTimeout    string // 服务未能在指定时间内退出
+	StopMethodCalled      string // Stop方法已被调用
+	ServiceStopping       string // 服务正在停止
+	ExecutingStopFunction string // 执行停止函数
+	ExitChannelClosed     string // 退出通道已关闭
+	ClosedExitChannel     string // 已关闭退出通道
+	CheckServiceStopped   string // 检查服务是否已停止
+	ExitChannelSignal     string // 服务收到退出通道信号
+	ContextCancelSignal   string // 服务收到上下文取消信号
+	InteractiveAutoStop   string // 交互模式下自动停止
 }
 
 // CommandMessages 命令相关消息
@@ -125,6 +138,19 @@ var (
 			ErrRestartService: "重启服务失败",
 			ErrCreateConfig:   "创建服务配置失败",
 			ErrCreateService:  "创建服务实例失败",
+
+			// 调试和信息消息
+			ReceiveSignal:         "接收到系统信号，准备退出程序",
+			ServiceStopTimeout:    "服务未能在%d秒内正常退出，强制结束进程",
+			StopMethodCalled:      "Stop方法已被调用过，跳过重复执行",
+			ServiceStopping:       "服务正在停止...",
+			ExecutingStopFunction: "执行用户定义的停止函数",
+			ExitChannelClosed:     "退出通道已经关闭",
+			ClosedExitChannel:     "已关闭退出通道",
+			CheckServiceStopped:   "检查服务是否已停止",
+			ExitChannelSignal:     "服务收到退出通道信号",
+			ContextCancelSignal:   "服务收到上下文取消信号",
+			InteractiveAutoStop:   "交互模式下自动停止服务",
 		},
 		Command: CommandMessages{
 			Usage:   "用法",
@@ -195,6 +221,19 @@ var (
 			ErrRestartService: "Failed to restart service",
 			ErrCreateConfig:   "Failed to create service configuration",
 			ErrCreateService:  "Failed to create service instance",
+
+			// Debug and info messages
+			ReceiveSignal:         "Received system signal, preparing to exit",
+			ServiceStopTimeout:    "Service failed to exit within %d seconds, force terminating process",
+			StopMethodCalled:      "Stop method has already been called, skipping repeated execution",
+			ServiceStopping:       "Service is stopping...",
+			ExecutingStopFunction: "Executing user-defined stop function",
+			ExitChannelClosed:     "Exit channel is already closed",
+			ClosedExitChannel:     "Closed exit channel",
+			CheckServiceStopped:   "Checking if service has stopped",
+			ExitChannelSignal:     "Service received exit channel signal",
+			ContextCancelSignal:   "Service received context cancellation signal",
+			InteractiveAutoStop:   "Auto-stopping service in interactive mode",
 		},
 		Command: CommandMessages{
 			Usage:       "Usage",
@@ -306,6 +345,17 @@ func validateServiceMessages(m ServiceMessages) error {
 		{m.ErrRestartService, "ErrRestartService"},
 		{m.ErrCreateConfig, "ErrCreateConfig"},
 		{m.ErrCreateService, "ErrCreateService"},
+		{m.ReceiveSignal, "ReceiveSignal"},
+		{m.ServiceStopTimeout, "ServiceStopTimeout"},
+		{m.StopMethodCalled, "StopMethodCalled"},
+		{m.ServiceStopping, "ServiceStopping"},
+		{m.ExecutingStopFunction, "ExecutingStopFunction"},
+		{m.ExitChannelClosed, "ExitChannelClosed"},
+		{m.ClosedExitChannel, "ClosedExitChannel"},
+		{m.CheckServiceStopped, "CheckServiceStopped"},
+		{m.ExitChannelSignal, "ExitChannelSignal"},
+		{m.ContextCancelSignal, "ContextCancelSignal"},
+		{m.InteractiveAutoStop, "InteractiveAutoStop"},
 	}
 
 	return validateFields(fields)

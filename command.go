@@ -167,13 +167,13 @@ func (c *Cli) Context() context.Context {
 // Execute 执行命令
 // 这是启动应用程序的主要入口点
 func (c *Cli) Execute() error {
-	return c.command.Execute()
+	return c.ExecuteContext(c.config.ctx)
 }
 
 // ExecuteC 执行命令并返回选中的命令
 // 主要用于需要访问选中命令的场景
 func (c *Cli) ExecuteC() (*Command, error) {
-	return c.command.ExecuteC()
+	return c.ExecuteContextC(c.config.ctx)
 }
 
 // ExecuteContext 在指定的上下文中执行命令

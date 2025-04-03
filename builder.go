@@ -1,5 +1,7 @@
 package zcli
 
+import "context"
+
 // Builder CLI构建器
 type Builder struct {
 	config *Config
@@ -18,6 +20,14 @@ func NewBuilder(lang ...string) *Builder {
 		b.WithLanguage(lang[0])
 	}
 
+	return b
+}
+
+// WithDefaultConfig 使用默认配置
+func (b *Builder) WithDefaultConfig() *Builder {
+	b.WithLanguage("zh").
+		WithVersion("1.0.0").
+		WithDebug(false)
 	return b
 }
 
@@ -117,14 +127,6 @@ func (b *Builder) WithDependencies(deps ...string) *Builder {
 	return b
 }
 
-// WithDefaultConfig 使用默认配置
-func (b *Builder) WithDefaultConfig() *Builder {
-	b.WithLanguage("zh").
-		WithVersion("1.0.0").
-		WithDebug(false)
-	return b
-}
-
 // WithRuntime 设置运行时配置
 func (b *Builder) WithRuntime(rt *Runtime) *Builder {
 	b.config.Runtime = rt
@@ -135,6 +137,12 @@ func (b *Builder) WithRuntime(rt *Runtime) *Builder {
 func (b *Builder) WithSystemService(run func(), stop ...func()) *Builder {
 	b.config.Runtime.Run = run
 	b.config.Runtime.Stop = stop
+	return b
+}
+
+// WithName 设置名称
+func (b *Builder) WithContext(ctx context.Context) *Builder {
+	b.config.ctx = ctx
 	return b
 }
 
