@@ -1,6 +1,9 @@
 package zcli
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Builder CLI构建器
 type Builder struct {
@@ -112,6 +115,15 @@ func (b *Builder) WithWorkDir(dir string) *Builder {
 	return b
 }
 
+// WithBuildTime 设置构建时间
+func (b *Builder) WithBuildTime(buildTime string) *Builder {
+	parsedTime, err := time.Parse(time.DateTime, buildTime)
+	if err == nil {
+		b.config.Runtime.BuildInfo.BuildTime = parsedTime
+	}
+	return b
+}
+
 // WithEnvVar 设置环境变量
 func (b *Builder) WithEnvVar(key, value string) *Builder {
 	if b.config.Service.EnvVars == nil {
@@ -140,7 +152,7 @@ func (b *Builder) WithSystemService(run func(), stop ...func()) *Builder {
 	return b
 }
 
-// WithName 设置名称
+// WithContext 设置名称
 func (b *Builder) WithContext(ctx context.Context) *Builder {
 	b.config.ctx = ctx
 	return b

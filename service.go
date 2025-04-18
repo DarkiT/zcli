@@ -35,7 +35,7 @@ func (c *Cli) initService() {
 	// 创建服务管理器
 	sm, err := newServiceManager(c, ctx, cancel)
 	if err != nil {
-		_, _ = c.colors.Error.Printf("初始化服务管理器失败: %v\n", err)
+		_, _ = c.colors.Error.Printf("%v\n", err)
 		return
 	}
 
@@ -60,7 +60,9 @@ func (c *Cli) setupSignalHandler(sm *sManager) {
 	}
 
 	// 如果服务没有及时退出，强制结束进程
-	sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(c.lang.Service.ServiceStopTimeout, 15), 1)
+	if sm != nil {
+		sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(c.lang.Service.ServiceStopTimeout, 15), 1)
+	}
 }
 
 // executeStopFunctions 执行所有已注册的停止函数

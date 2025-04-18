@@ -3,7 +3,6 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/darkit/zcli.svg)](https://pkg.go.dev/github.com/darkit/zcli)
 [![Go Report Card](https://goreportcard.com/badge/github.com/darkit/zcli)](https://goreportcard.com/report/github.com/darkit/zcli)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/darkit/zcli/blob/master/LICENSE)
-[![GoDoc](https://godoc.org/github.com/darkit/zcli?status.svg)](https://pkg.go.dev/github.com/darkit/zcli)
 
 ZCli 是一个基于 [cobra](https://github.com/spf13/cobra) 的命令行应用框架，提供了更友好的命令行界面和系统服务管理功能。
 

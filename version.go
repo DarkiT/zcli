@@ -30,7 +30,7 @@ func NewVersion() *VersionInfo {
 		Platform:     runtime.GOOS,
 		Architecture: runtime.GOARCH,
 		Compiler:     runtime.Compiler,
-		BuildTime:    time.Now(),
+		BuildTime:    time.Time{},
 	}
 }
 
