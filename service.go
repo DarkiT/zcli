@@ -171,7 +171,7 @@ func (sm *sManager) Start(s service.Service) error {
 
 	// 防止重复启动
 	if sm.running.Load() {
-		return fmt.Errorf(sm.localizer.GetError("alreadyRunning"))
+		return fmt.Errorf("%s", sm.localizer.GetError("alreadyRunning"))
 	}
 
 	// 使用互斥锁保护 exitChan 的访问和修改
@@ -280,7 +280,7 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 		// Unix-like系统配置
 		execPath, err := os.Executable()
 		if err != nil {
-			return nil, fmt.Errorf(sm.localizer.FormatError("getExecPath", err))
+			return nil, fmt.Errorf("%s", sm.localizer.FormatError("getExecPath", err))
 		}
 
 		// 设置可执行文件路径
@@ -310,18 +310,18 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 
 		// 验证权限
 		if err := checkPermissions(config.Executable, 0o755, sm.localizer); err != nil {
-			return nil, fmt.Errorf(sm.localizer.FormatError("execPermission", config.Executable, err))
+			return nil, fmt.Errorf("%s", sm.localizer.FormatError("execPermission", config.Executable, err))
 		}
 
 		if config.WorkingDirectory != "" {
 			if err := checkPermissions(config.WorkingDirectory, 0o755, sm.localizer); err != nil {
-				return nil, fmt.Errorf(sm.localizer.FormatError("workDirPermission", config.WorkingDirectory, err))
+				return nil, fmt.Errorf("%s", sm.localizer.FormatError("workDirPermission", config.WorkingDirectory, err))
 			}
 		}
 
 		if config.ChRoot != "" {
 			if err := checkPermissions(config.ChRoot, 0o755, sm.localizer); err != nil {
-				return nil, fmt.Errorf(sm.localizer.FormatError("chrootPermission", config.ChRoot, err))
+				return nil, fmt.Errorf("%s", sm.localizer.FormatError("chrootPermission", config.ChRoot, err))
 			}
 		}
 	}
@@ -413,7 +413,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 		case <-time.After(3 * time.Second):
 			// 超时3秒，尝试调用停止函数
 			if !sm.stopExecuted.Load() {
-				sm.localizer.LogWarning(sm.localizer.GetError("timeoutWarning"))
+				sm.localizer.LogWarning("%s", sm.localizer.GetError("timeoutWarning"))
 				// 如果尚未执行过，则调用 Stop 方法
 				_ = sm.Stop(sm.service)
 			} else {
@@ -429,7 +429,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 
 			case <-time.After(2 * time.Second):
 				// 总计5秒后仍未退出，标记为已停止
-				sm.localizer.LogWarning(sm.localizer.GetError("forceTerminate"))
+				sm.localizer.LogWarning("%s", sm.localizer.GetError("forceTerminate"))
 				sm.running.Store(false)
 				sm.stopExecuted.Store(true)
 				return
@@ -569,7 +569,7 @@ func (sm *sManager) newRestartCmd() *cobra.Command {
 		}
 
 		if status == service.StatusUnknown {
-			return fmt.Errorf(sm.localizer.FormatError("notFound", sm.commands.config.Basic.Name))
+			return fmt.Errorf("%s", sm.localizer.FormatError("notFound", sm.commands.config.Basic.Name))
 		}
 
 		// 如果服务正在运行，先停止
@@ -642,9 +642,9 @@ func checkPermissions(path string, requiredPerm os.FileMode, localizer *ServiceL
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf(localizer.FormatError("pathNotExist", path))
+			return fmt.Errorf("%s", localizer.FormatError("pathNotExist", path))
 		}
-		return fmt.Errorf(localizer.FormatError("getPathInfo", err))
+		return fmt.Errorf("%s", localizer.FormatError("getPathInfo", err))
 	}
 
 	// 检查是否有足够的权限
@@ -652,14 +652,14 @@ func checkPermissions(path string, requiredPerm os.FileMode, localizer *ServiceL
 
 	// 对于可执行文件，检查是否有执行权限
 	if requiredPerm&0o111 != 0 && currentPerm&0o111 == 0 {
-		return fmt.Errorf(localizer.FormatError("insufficientPerm",
+		return fmt.Errorf("%s", localizer.FormatError("insufficientPerm",
 			fmt.Sprintf("%o", requiredPerm),
 			fmt.Sprintf("%o", currentPerm)))
 	}
 
 	// 对于目录，检查是否有读写权限
 	if fileInfo.IsDir() && requiredPerm&0o600 != 0 && currentPerm&0o600 == 0 {
-		return fmt.Errorf(localizer.FormatError("insufficientPerm",
+		return fmt.Errorf("%s", localizer.FormatError("insufficientPerm",
 			fmt.Sprintf("%o", requiredPerm),
 			fmt.Sprintf("%o", currentPerm)))
 	}

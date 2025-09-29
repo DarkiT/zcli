@@ -1,3 +1,5 @@
+// Package zcli 提供命令行工具构建功能，包括增强的错误处理机制。
+// 本包实现了结构化错误处理、错误聚合和详细的错误追踪功能。
 package zcli
 
 import (
@@ -48,14 +50,14 @@ const (
 
 // ServiceError 增强的服务错误类型
 type ServiceError struct {
-	Code      ErrorCode              `json:"code"`
-	Operation string                 `json:"operation"`
-	Service   string                 `json:"service"`
-	Message   string                 `json:"message"`
-	Cause     error                  `json:"cause,omitempty"`
-	Context   map[string]interface{} `json:"context,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
-	Stack     []string               `json:"stack,omitempty"`
+	Code      ErrorCode      `json:"code"`
+	Operation string         `json:"operation"`
+	Service   string         `json:"service"`
+	Message   string         `json:"message"`
+	Cause     error          `json:"cause,omitempty"`
+	Context   map[string]any `json:"context,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+	Stack     []string       `json:"stack,omitempty"`
 }
 
 // NewServiceError 创建新的服务错误
@@ -65,7 +67,7 @@ func NewServiceError(code ErrorCode, operation, service, message string) *Servic
 		Operation: operation,
 		Service:   service,
 		Message:   message,
-		Context:   make(map[string]interface{}),
+		Context:   make(map[string]any),
 		Timestamp: time.Now(),
 	}
 }
@@ -85,9 +87,9 @@ func (se *ServiceError) WithCause(cause error) *ServiceError {
 }
 
 // WithContext 添加上下文信息
-func (se *ServiceError) WithContext(key string, value interface{}) *ServiceError {
+func (se *ServiceError) WithContext(key string, value any) *ServiceError {
 	if se.Context == nil {
-		se.Context = make(map[string]interface{})
+		se.Context = make(map[string]any)
 	}
 	se.Context[key] = value
 	return se
@@ -128,16 +130,16 @@ func (se *ServiceError) GetService() string {
 }
 
 // GetContext 获取上下文信息
-func (se *ServiceError) GetContext() map[string]interface{} {
+func (se *ServiceError) GetContext() map[string]any {
 	if se.Context == nil {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 	return se.Context
 }
 
 // ToJSON 转换为JSON格式
-func (se *ServiceError) ToJSON() map[string]interface{} {
-	result := map[string]interface{}{
+func (se *ServiceError) ToJSON() map[string]any {
+	result := map[string]any{
 		"code":      se.Code,
 		"operation": se.Operation,
 		"service":   se.Service,
@@ -149,11 +151,11 @@ func (se *ServiceError) ToJSON() map[string]interface{} {
 		result["cause"] = se.Cause.Error()
 	}
 
-	if se.Context != nil && len(se.Context) > 0 {
+	if len(se.Context) > 0 {
 		result["context"] = se.Context
 	}
 
-	if se.Stack != nil && len(se.Stack) > 0 {
+	if len(se.Stack) > 0 {
 		result["stack"] = se.Stack
 	}
 
@@ -174,7 +176,7 @@ func NewError(code ErrorCode) *ErrorBuilder {
 	return &ErrorBuilder{
 		err: &ServiceError{
 			Code:      code,
-			Context:   make(map[string]interface{}),
+			Context:   make(map[string]any),
 			Timestamp: time.Now(),
 		},
 	}
@@ -199,7 +201,7 @@ func (eb *ErrorBuilder) Message(message string) *ErrorBuilder {
 }
 
 // Messagef 设置格式化错误消息
-func (eb *ErrorBuilder) Messagef(format string, args ...interface{}) *ErrorBuilder {
+func (eb *ErrorBuilder) Messagef(format string, args ...any) *ErrorBuilder {
 	eb.err.Message = fmt.Sprintf(format, args...)
 	return eb
 }
@@ -211,7 +213,7 @@ func (eb *ErrorBuilder) Cause(cause error) *ErrorBuilder {
 }
 
 // Context 添加上下文信息
-func (eb *ErrorBuilder) Context(key string, value interface{}) *ErrorBuilder {
+func (eb *ErrorBuilder) Context(key string, value any) *ErrorBuilder {
 	eb.err.Context[key] = value
 	return eb
 }
@@ -329,9 +331,9 @@ type LoggingErrorHandler struct {
 
 // Logger 日志接口
 type Logger interface {
-	Error(msg string, fields ...interface{})
-	Warn(msg string, fields ...interface{})
-	Info(msg string, fields ...interface{})
+	Error(msg string, fields ...any)
+	Warn(msg string, fields ...any)
+	Info(msg string, fields ...any)
 }
 
 // NewLoggingErrorHandler 创建日志错误处理器

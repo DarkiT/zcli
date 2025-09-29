@@ -69,6 +69,7 @@ func TestFinalIntegration(t *testing.T) {
 		renderer := newUIRenderer(app)
 		if renderer == nil {
 			t.Error("UI renderer should not be nil")
+			return
 		}
 
 		if renderer.cli != app {
@@ -101,10 +102,12 @@ func TestFinalIntegration(t *testing.T) {
 func TestAllPhasesCompleted(t *testing.T) {
 	// 阶段1：并发安全问题修复
 	t.Run("Phase1_ConcurrencySafety", func(t *testing.T) {
-		// 验证Service并发安全
+		// 验证Service配置结构体创建
 		service := &Service{}
-		if service == nil {
-			t.Error("Service should be creatable")
+		// Service 结构体应该可以正常创建
+		if service.Username == "" && service.WorkDir == "" {
+			// 空的Service配置是有效的，可以后续设置
+			t.Log("Service configuration created successfully")
 		}
 		// 其他并发安全测试已在service_concurrent_test.go中
 	})
