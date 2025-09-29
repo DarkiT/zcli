@@ -218,6 +218,8 @@ func (csm *ConcurrentServiceManager) Start() error {
 		if err := csm.runner.Run(startCtx); err != nil {
 			errChan <- err
 		} else {
+			// 服务正常结束，设置状态为停止
+			csm.setState(StateStopped)
 			errChan <- nil
 		}
 	}()
