@@ -61,7 +61,8 @@ func (c *Cli) setupSignalHandler(sm *sManager) {
 
 	// 如果服务没有及时退出，强制结束进程
 	if sm != nil {
-		sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(c.lang.Service.ServiceStopTimeout, 15), 1)
+		timeoutMsg := sm.localizer.FormatError("timeout", 15)
+		sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
 	}
 }
 
@@ -96,7 +97,7 @@ func (c *Cli) addServiceCommands(sm *sManager) {
 			originalRun(cmd, args)
 		} else {
 			// 如果没有设置Run函数，则默认执行run命令
-			sm.runRun(cmd, args)
+			sm.executeRunCommand(cmd, args)
 		}
 	}
 }
@@ -104,6 +105,7 @@ func (c *Cli) addServiceCommands(sm *sManager) {
 // sManager 服务管理器，封装service库的底层功能
 type sManager struct {
 	commands     *Cli               // CLI实例引用
+	localizer    *ServiceLocalizer  // 服务本地化器
 	ctx          context.Context    // 上下文，用于控制服务生命周期
 	cancel       context.CancelFunc // 取消函数
 	mu           sync.RWMutex       // 互斥锁，保证并发安全
@@ -116,11 +118,15 @@ type sManager struct {
 
 // newServiceManager 创建服务管理器实例
 func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc) (*sManager, error) {
+	// 创建服务本地化器
+	localizer := NewServiceLocalizer(GetLanguageManager(), cmd.colors)
+
 	sm := &sManager{
-		commands: cmd,
-		ctx:      ctx,
-		cancel:   cancel,
-		exitChan: make(chan struct{}),
+		commands:  cmd,
+		localizer: localizer,
+		ctx:       ctx,
+		cancel:    cancel,
+		exitChan:  make(chan struct{}),
 	}
 
 	// 初始化为未执行状态
@@ -130,7 +136,7 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 	config, err := sm.createServiceConfig()
 	if err != nil {
 		cancel() // 取消上下文
-		return nil, fmt.Errorf(cmd.lang.Service.ErrCreateConfig+": %v", err)
+		return nil, fmt.Errorf(localizer.FormatError("createConfig")+": %v", err)
 	}
 	sm.config = config
 
@@ -138,7 +144,7 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 	svc, err := service.New(sm, config)
 	if err != nil {
 		cancel() // 取消上下文
-		return nil, fmt.Errorf(cmd.lang.Service.ErrCreateService+": %v", err)
+		return nil, fmt.Errorf(localizer.FormatError("createService")+": %v", err)
 	}
 	sm.service = svc
 
@@ -150,24 +156,27 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 			_ = sm.Stop(sm.service)
 
 			// 确保退出应用程序，防止卡死
-			sm.ExitWithTimeout(15*time.Second, fmt.Sprintf(cmd.lang.Service.ServiceStopTimeout, 15), 1)
+			timeoutMsg := localizer.FormatError("timeout", 15)
+			sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
 		}
 	}()
 
 	return sm, nil
 }
 
-// Start 实现 service.Interface 接口，启动服务
+// Start 实现 service.Interface 接口，支持前台和服务模式
 func (sm *sManager) Start(s service.Service) error {
 	// 重置停止标志
 	sm.stopExecuted.Store(false)
 
 	// 防止重复启动
 	if sm.running.Load() {
-		return fmt.Errorf(sm.commands.lang.Service.ServiceAlreadyRunning)
+		return fmt.Errorf(sm.localizer.GetError("alreadyRunning"))
 	}
 
-	// 确保退出通道已关闭
+	// 使用互斥锁保护 exitChan 的访问和修改
+	sm.mu.Lock()
+	// 安全地检查和重新创建退出通道
 	select {
 	case <-sm.exitChan:
 		// 通道已关闭，重新创建
@@ -175,6 +184,9 @@ func (sm *sManager) Start(s service.Service) error {
 	default:
 		// 通道未关闭，不需要操作
 	}
+	// 获取当前的 exitChan 引用，防止在使用过程中被其他 goroutine 修改
+	exitChan := sm.exitChan
+	sm.mu.Unlock()
 
 	// 标记为运行状态
 	sm.running.Store(true)
@@ -185,23 +197,18 @@ func (sm *sManager) Start(s service.Service) error {
 
 		// 执行用户定义的运行函数
 		if sm.commands.config.Runtime.Run != nil {
-			sm.commands.config.Runtime.Run()
+			// 优雅调用：传入context，用户可以选择使用或忽略
+			// - 向下兼容：func() 忽略传入的context参数
+			// - 推荐方式：func(ctx context.Context) 使用传入的context
+			sm.commands.config.Runtime.Run(sm.ctx)
 		}
 
 		// 监听退出信号
 		select {
-		case <-sm.exitChan:
+		case <-exitChan:
 			// 收到退出通道信号
 		case <-sm.ctx.Done():
-			// 收到上下文取消信号
-			// 如果是由上下文取消触发，主动关闭退出通道
-			select {
-			case <-sm.exitChan:
-				// 通道已关闭，不需要操作
-			default:
-				// 关闭退出通道
-				close(sm.exitChan)
-			}
+			// 上下文取消
 		}
 
 		// 如果是交互式模式，自动停止服务
@@ -235,12 +242,14 @@ func (sm *sManager) Stop(s service.Service) error {
 		}
 	}
 
-	// 检查退出通道是否已关闭，如未关闭则关闭
+	// 使用互斥锁和原子操作保护退出通道的关闭操作
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	select {
 	case <-sm.exitChan:
 		// 通道已关闭，不需要操作
 	default:
-		// 发送退出信号
+		// 安全地关闭退出信号通道
 		close(sm.exitChan)
 	}
 
@@ -252,64 +261,83 @@ func (sm *sManager) Stop(s service.Service) error {
 
 // createServiceConfig 创建服务配置
 func (sm *sManager) createServiceConfig() (*service.Config, error) {
-	// 从CLI配置创建服务配置
+	// 从CLI配置创建完整的服务配置
 	config := &service.Config{
-		Name:             sm.commands.config.Basic.Name,
-		DisplayName:      sm.commands.config.Basic.DisplayName,
-		Description:      sm.commands.config.Basic.Description,
-		UserName:         sm.commands.config.Service.Username,
-		Arguments:        sm.commands.config.Service.Arguments,
-		Executable:       sm.commands.config.Service.Executable,
-		Dependencies:     sm.commands.config.Service.Dependencies,
-		WorkingDirectory: sm.commands.config.Service.WorkDir,
-		ChRoot:           sm.commands.config.Service.ChRoot,
-		Option:           sm.commands.config.Service.Options,
-		EnvVars:          sm.commands.config.Service.EnvVars,
+		Name:        sm.commands.config.Basic.Name,
+		DisplayName: sm.commands.config.Basic.DisplayName,
+		Description: sm.commands.config.Basic.Description,
 	}
 
-	// 获取可执行文件路径
-	execPath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf(sm.commands.lang.Service.ErrGetExecPath, err)
-	}
-	if config.Executable == "" {
-		config.Executable = execPath
-	}
-
-	// 获取工作目录
-	if config.WorkingDirectory == "" {
-		config.WorkingDirectory = filepath.Dir(execPath)
-	}
-
-	// 非Windows系统检查文件权限
-	if runtime.GOOS != "windows" {
-		// 检查可执行文件路径权限
-		if err := checkPermissions(config.Executable, 0o500, sm.commands.lang); err != nil {
-			return nil, fmt.Errorf(sm.commands.lang.Service.ErrExecFilePermission, config.Executable, err)
+	// 根据操作系统设置不同的配置
+	switch runtime.GOOS {
+	case "windows":
+		// Windows服务配置
+		config.Arguments = []string{"run"}
+		if sm.commands.config.Service.Arguments != nil {
+			config.Arguments = sm.commands.config.Service.Arguments
 		}
-	}
+	default:
+		// Unix-like系统配置
+		execPath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf(sm.localizer.FormatError("getExecPath", err))
+		}
 
-	// 检查工作目录权限
-	if err := checkPermissions(config.WorkingDirectory, 0o700, sm.commands.lang); err != nil {
-		return nil, fmt.Errorf(sm.commands.lang.Service.ErrWorkDirPermission, config.WorkingDirectory, err)
-	}
+		// 设置可执行文件路径
+		config.Executable = execPath
+		if sm.commands.config.Service.Executable != "" {
+			config.Executable = sm.commands.config.Service.Executable
+		}
 
-	// 检查 ChRoot 目录权限（如果启用）
-	if config.ChRoot != "" {
-		if err := checkPermissions(config.ChRoot, 0o700, sm.commands.lang); err != nil {
-			return nil, fmt.Errorf(sm.commands.lang.Service.ErrChrootPermission, config.ChRoot, err)
+		// 设置工作目录
+		config.WorkingDirectory = filepath.Dir(execPath)
+		if sm.commands.config.Service.WorkDir != "" {
+			config.WorkingDirectory = sm.commands.config.Service.WorkDir
+		}
+
+		// 设置运行参数
+		config.Arguments = []string{"run"}
+		if sm.commands.config.Service.Arguments != nil {
+			config.Arguments = sm.commands.config.Service.Arguments
+		}
+
+		// 设置其他配置选项
+		config.UserName = sm.commands.config.Service.Username
+		config.Dependencies = sm.commands.config.Service.Dependencies
+		config.ChRoot = sm.commands.config.Service.ChRoot
+		config.Option = sm.commands.config.Service.Options
+		config.EnvVars = sm.commands.config.Service.EnvVars
+
+		// 验证权限
+		if err := checkPermissions(config.Executable, 0o755, sm.localizer); err != nil {
+			return nil, fmt.Errorf(sm.localizer.FormatError("execPermission", config.Executable, err))
+		}
+
+		if config.WorkingDirectory != "" {
+			if err := checkPermissions(config.WorkingDirectory, 0o755, sm.localizer); err != nil {
+				return nil, fmt.Errorf(sm.localizer.FormatError("workDirPermission", config.WorkingDirectory, err))
+			}
+		}
+
+		if config.ChRoot != "" {
+			if err := checkPermissions(config.ChRoot, 0o755, sm.localizer); err != nil {
+				return nil, fmt.Errorf(sm.localizer.FormatError("chrootPermission", config.ChRoot, err))
+			}
 		}
 	}
 
 	return config, nil
 }
 
-// runRun 运行服务（在前台）
-func (sm *sManager) runRun(_ *cobra.Command, args []string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+// executeRunCommand 执行运行命令，支持前台和服务模式
+func (sm *sManager) executeRunCommand(_ *cobra.Command, args []string) error {
+	// 如果服务正在运行，显示警告并退出
+	if sm.running.Load() {
+		sm.localizer.LogError("alreadyRunning", nil)
+		return nil
+	}
 
-	// 构建运行参数
+	// 处理运行参数
 	serviceArgs := args
 	if len(serviceArgs) == 0 && len(sm.commands.config.Service.Arguments) > 0 {
 		serviceArgs = sm.commands.config.Service.Arguments
@@ -317,44 +345,64 @@ func (sm *sManager) runRun(_ *cobra.Command, args []string) {
 
 	// 如果有参数变化，重新创建服务实例
 	if len(serviceArgs) > 0 {
+		sm.mu.Lock()
 		sm.config.Arguments = serviceArgs
 		svc, err := service.New(sm, sm.config)
 		if err != nil {
-			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.ErrCreateService+": %v\n", err)
-			return
+			sm.mu.Unlock()
+			sm.localizer.LogError("createService", err)
+			return fmt.Errorf(sm.localizer.FormatError("createService")+": %v", err)
 		}
 		sm.service = svc
+		sm.mu.Unlock()
 	}
 
-	// 确保状态重置
+	// 重置状态
 	sm.stopExecuted.Store(false)
 
-	// 创建一个用于监控服务运行状态的通道
+	// 创建监控通道
 	runDone := make(chan struct{})
 
-	// 在另一个goroutine中运行服务
+	// 在goroutine中运行服务
 	go func() {
 		defer close(runDone)
-		// 启动服务
+		defer func() {
+			if r := recover(); r != nil {
+				sm.localizer.LogError("runFailed", fmt.Errorf("%v", r))
+			}
+		}()
+
+		// 启动服务 - 这会调用用户的Run函数
 		if err := sm.service.Run(); err != nil {
-			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.ErrRunService+": %v\n", err)
+			sm.localizer.LogError("runFailed", err)
 		}
 	}()
 
-	// 使用单独的函数处理服务结束和超时逻辑，使代码更清晰
+	// 等待服务完成，支持前台/服务模式区分
 	sm.waitForServiceCompletion(runDone)
+	return nil
 }
 
-// waitForServiceCompletion 等待服务完成或响应信号
+// waitForServiceCompletion 等待服务完成，支持交互式和服务模式
 func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
-	// 等待服务退出或收到信号
 	select {
 	case <-runDone:
-		// 服务自行退出，无需额外处理
+		// 服务正常退出
 		return
 
 	case <-sm.ctx.Done():
 		// 收到取消信号，尝试优雅停止
+
+		// 如果是交互式模式，安全地关闭退出通道
+		sm.mu.Lock()
+		defer sm.mu.Unlock()
+		select {
+		case <-sm.exitChan:
+			// 通道已关闭，不需要操作
+		default:
+			// 安全地关闭退出通道，通知服务停止
+			close(sm.exitChan)
+		}
 
 		// 使用超时机制等待服务退出
 		select {
@@ -365,7 +413,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 		case <-time.After(3 * time.Second):
 			// 超时3秒，尝试调用停止函数
 			if !sm.stopExecuted.Load() {
-				_, _ = sm.commands.colors.Warning.Println(sm.commands.lang.Service.StopTimeoutReinvoke)
+				sm.localizer.LogWarning(sm.localizer.GetError("timeoutWarning"))
 				// 如果尚未执行过，则调用 Stop 方法
 				_ = sm.Stop(sm.service)
 			} else {
@@ -381,7 +429,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 
 			case <-time.After(2 * time.Second):
 				// 总计5秒后仍未退出，标记为已停止
-				_, _ = sm.commands.colors.Warning.Println(sm.commands.lang.Service.ServiceStopTimedOut)
+				sm.localizer.LogWarning(sm.localizer.GetError("forceTerminate"))
 				sm.running.Store(false)
 				sm.stopExecuted.Store(true)
 				return
@@ -390,7 +438,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 	}
 }
 
-// callStopFunctions 调用用户注册的所有停止函数
+// callStopFunctions 调用停止函数
 func (sm *sManager) callStopFunctions() {
 	if sm.commands.config.Runtime.Stop != nil {
 		for _, stop := range sm.commands.config.Runtime.Stop {
@@ -401,50 +449,43 @@ func (sm *sManager) callStopFunctions() {
 	}
 }
 
-// buildBaseCommand 构建基础命令模板
+// buildBaseCommand 构建基础命令
 func (sm *sManager) buildBaseCommand(use, short string) *cobra.Command {
 	return &cobra.Command{
-		Use:                   use,
-		Short:                 short,
-		DisableFlagParsing:    true, // 禁用标志解析
-		DisableFlagsInUseLine: true, // 在使用说明中禁用标志
-		SilenceErrors:         true, // 禁用错误输出
-		SilenceUsage:          true, // 禁用使用说明输出
+		Use:   use,
+		Short: short,
 	}
 }
 
 // newInstallCmd 创建安装服务命令
 func (sm *sManager) newInstallCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("install", sm.commands.lang.Service.Install)
-	cmd.FParseErrWhitelist = cobra.FParseErrWhitelist{UnknownFlags: true}
+	cmd := sm.buildBaseCommand("install", sm.localizer.GetOperation("install"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
+		// 检查权限
+		var err error
 
-		// 构建运行参数，通常安装服务时需要包含 "run" 参数
-		serviceArgs := append([]string{"run"}, args...)
-		sm.config.Arguments = serviceArgs
-
-		// 重新创建服务实例
-		svc, err := service.New(sm, sm.config)
-		if err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrCreateService+": %v", err)
+		// 创建服务实例
+		if sm.service == nil {
+			svc, createErr := service.New(sm, sm.config)
+			if createErr != nil {
+				return fmt.Errorf(sm.localizer.FormatError("createService")+": %v", createErr)
+			}
+			sm.service = svc
 		}
-		sm.service = svc
 
 		// 检查服务是否已安装
-		status, err := sm.service.Status()
-		if err == nil && status != service.StatusUnknown {
-			_, _ = sm.commands.colors.Warning.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.AlreadyExists)
+		status, _ := sm.service.Status()
+		if status != service.StatusUnknown {
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "alreadyExists")
 			return nil
 		}
 
 		// 安装服务
 		if err = sm.service.Install(); err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrInstallService, err)
+			return fmt.Errorf(sm.localizer.FormatError("installFailed"), err)
 		}
 
-		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
+		sm.localizer.LogSuccess(sm.commands.config.Basic.Name, "install")
 		return nil
 	}
 	return cmd
@@ -452,20 +493,14 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 
 // newUninstallCmd 创建卸载服务命令
 func (sm *sManager) newUninstallCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("uninstall", sm.commands.lang.Service.Uninstall)
+	cmd := sm.buildBaseCommand("uninstall", sm.localizer.GetOperation("uninstall"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-
-		// 先停止服务
-		_ = sm.service.Stop()
-
 		// 卸载服务
 		if err := sm.service.Uninstall(); err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrUninstallService, err)
+			return fmt.Errorf(sm.localizer.FormatError("uninstallFailed"), err)
 		}
 
-		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
+		sm.localizer.LogSuccess(sm.commands.config.Basic.Name, "uninstall")
 		return nil
 	}
 	return cmd
@@ -473,28 +508,25 @@ func (sm *sManager) newUninstallCmd() *cobra.Command {
 
 // newStartCmd 创建启动服务命令
 func (sm *sManager) newStartCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("start", sm.commands.lang.Service.Start)
+	cmd := sm.buildBaseCommand("start", sm.localizer.GetOperation("start"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-
 		// 检查服务状态
 		status, err := sm.service.Status()
 		if err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrGetStatus+": %v", err)
+			return fmt.Errorf(sm.localizer.FormatError("getStatus")+": %v", err)
 		}
 
 		if status == service.StatusRunning {
-			_, _ = sm.commands.colors.Warning.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.AlreadyRunning)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "alreadyRunning")
 			return nil
 		}
 
 		// 启动服务
-		if err = sm.service.Start(); err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrStartService+": %v", err)
+		if err := sm.service.Start(); err != nil {
+			return fmt.Errorf(sm.localizer.FormatError("startFailed")+": %v", err)
 		}
 
-		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
+		sm.localizer.LogSuccess(sm.commands.config.Basic.Name, "start")
 		return nil
 	}
 	return cmd
@@ -502,28 +534,25 @@ func (sm *sManager) newStartCmd() *cobra.Command {
 
 // newStopCmd 创建停止服务命令
 func (sm *sManager) newStopCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("stop", sm.commands.lang.Service.Stop)
+	cmd := sm.buildBaseCommand("stop", sm.localizer.GetOperation("stop"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-
 		// 检查服务状态
 		status, err := sm.service.Status()
 		if err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrGetStatus+": %v", err)
+			return fmt.Errorf(sm.localizer.FormatError("getStatus")+": %v", err)
 		}
 
 		if status == service.StatusStopped {
-			_, _ = sm.commands.colors.Warning.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.AlreadyStopped)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "alreadyStopped")
 			return nil
 		}
 
 		// 停止服务
-		if err = sm.service.Stop(); err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrStopService+": %v", err)
+		if err := sm.service.Stop(); err != nil {
+			return fmt.Errorf(sm.localizer.FormatError("stopFailed")+": %v", err)
 		}
 
-		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
+		sm.localizer.LogSuccess(sm.commands.config.Basic.Name, "stop")
 		return nil
 	}
 	return cmd
@@ -531,61 +560,56 @@ func (sm *sManager) newStopCmd() *cobra.Command {
 
 // newRestartCmd 创建重启服务命令
 func (sm *sManager) newRestartCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("restart", sm.commands.lang.Service.Restart)
+	cmd := sm.buildBaseCommand("restart", sm.localizer.GetOperation("restart"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-
 		// 检查服务状态
 		status, err := sm.service.Status()
 		if err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrGetStatus+": %v", err)
+			return fmt.Errorf(sm.localizer.FormatError("getStatus")+": %v", err)
 		}
 
 		if status == service.StatusUnknown {
-			return fmt.Errorf(sm.commands.lang.Service.ErrServiceNotFound, sm.commands.config.Basic.Name)
+			return fmt.Errorf(sm.localizer.FormatError("notFound", sm.commands.config.Basic.Name))
 		}
 
-		// 先停止服务
-		_ = sm.service.Stop()
-
-		// 等待服务完全停止
-		time.Sleep(time.Second * 2)
+		// 如果服务正在运行，先停止
+		if status == service.StatusRunning {
+			if err := sm.service.Stop(); err != nil {
+				return fmt.Errorf(sm.localizer.FormatError("stopFailed")+": %v", err)
+			}
+		}
 
 		// 启动服务
-		if err = sm.service.Start(); err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrRestartService+": %v", err)
+		if err := sm.service.Start(); err != nil {
+			return fmt.Errorf(sm.localizer.FormatError("restartFailed")+": %v", err)
 		}
 
-		_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Success)
+		sm.localizer.LogSuccess(sm.commands.config.Basic.Name, "restart")
 		return nil
 	}
 	return cmd
 }
 
-// newStatusCmd 创建查看服务状态命令
+// newStatusCmd 创建查看状态命令
 func (sm *sManager) newStatusCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("status", sm.commands.lang.Service.Status)
+	cmd := sm.buildBaseCommand("status", sm.localizer.GetOperation("status"))
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		sm.mu.RLock()
-		defer sm.mu.RUnlock()
-
 		// 获取服务状态
 		status, err := sm.service.Status()
 		if err != nil {
-			return fmt.Errorf(sm.commands.lang.Service.ErrGetStatus+": %v", err)
+			return fmt.Errorf(sm.localizer.FormatError("getStatus")+": %v", err)
 		}
 
-		// 根据状态显示不同的消息
+		// 显示状态
 		switch status {
 		case service.StatusRunning:
-			_, _ = sm.commands.colors.Success.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Running)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "running")
 		case service.StatusStopped:
-			_, _ = sm.commands.colors.Warning.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Stopped)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "stopped")
 		case service.StatusUnknown:
-			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.NotInstalled)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "notInstalled")
 		default:
-			_, _ = sm.commands.colors.Error.Printf(sm.commands.lang.Service.StatusFormat+separator, sm.commands.config.Basic.Name, sm.commands.lang.Service.Unknown)
+			sm.localizer.LogInfo(sm.commands.config.Basic.Name, "unknown")
 		}
 
 		return nil
@@ -593,44 +617,51 @@ func (sm *sManager) newStatusCmd() *cobra.Command {
 	return cmd
 }
 
-// newRunCmd 创建在前台运行服务的命令
+// newRunCmd 创建运行服务命令
 func (sm *sManager) newRunCmd() *cobra.Command {
-	cmd := sm.buildBaseCommand("run", sm.commands.lang.Service.Run)
-	cmd.Run = func(cmd *cobra.Command, args []string) {
-		sm.runRun(cmd, args)
+	cmd := sm.buildBaseCommand("run", sm.localizer.GetOperation("run"))
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return sm.executeRunCommand(cmd, args)
 	}
 	return cmd
 }
 
-// ExitWithTimeout 设置一个超时强制退出机制
-// 参数说明：
-//   - timeout: 超时时间（如 15*time.Second）
-//   - debugMsg: 退出前的调试信息（可选）
-//   - exitCode: 退出状态码（默认0）
+// ExitWithTimeout 在指定时间后强制退出程序
 func (sm *sManager) ExitWithTimeout(timeout time.Duration, debugMsg string, exitCode int) {
-	time.AfterFunc(timeout, func() {
+	go func() {
+		time.Sleep(timeout)
 		if debugMsg != "" {
-			_, _ = sm.commands.colors.Error.Println(debugMsg)
+			_, _ = fmt.Fprintln(os.Stderr, debugMsg)
 		}
 		os.Exit(exitCode)
-	})
+	}()
 }
 
 // checkPermissions 检查文件或目录的权限
-func checkPermissions(path string, requiredPerm os.FileMode, lang *Language) error {
-	// 检查路径是否存在
+func checkPermissions(path string, requiredPerm os.FileMode, localizer *ServiceLocalizer) error {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf(lang.Service.ErrPathNotExist, path)
+			return fmt.Errorf(localizer.FormatError("pathNotExist", path))
 		}
-		return fmt.Errorf(lang.Service.ErrGetPathInfo, err)
+		return fmt.Errorf(localizer.FormatError("getPathInfo", err))
 	}
 
 	// 检查是否有足够的权限
-	perm := fileInfo.Mode() & os.ModePerm
-	if perm&requiredPerm != requiredPerm {
-		return fmt.Errorf(lang.Service.ErrInsufficientPerm, requiredPerm, perm)
+	currentPerm := fileInfo.Mode() & os.ModePerm
+
+	// 对于可执行文件，检查是否有执行权限
+	if requiredPerm&0o111 != 0 && currentPerm&0o111 == 0 {
+		return fmt.Errorf(localizer.FormatError("insufficientPerm",
+			fmt.Sprintf("%o", requiredPerm),
+			fmt.Sprintf("%o", currentPerm)))
+	}
+
+	// 对于目录，检查是否有读写权限
+	if fileInfo.IsDir() && requiredPerm&0o600 != 0 && currentPerm&0o600 == 0 {
+		return fmt.Errorf(localizer.FormatError("insufficientPerm",
+			fmt.Sprintf("%o", requiredPerm),
+			fmt.Sprintf("%o", currentPerm)))
 	}
 
 	return nil

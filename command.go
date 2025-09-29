@@ -2,6 +2,7 @@ package zcli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -38,13 +39,19 @@ func NewCli(opts ...Option) *Cli {
 		}
 	}
 
+	// 设置语言
+	if cfg.Basic.Language != "" {
+		_ = SetLanguage(cfg.Basic.Language)
+	}
+
 	cmd := &Cli{
 		config: cfg,
 		colors: newColors(),
-		lang:   getServiceLanguage(cfg.Basic.Language),
+		lang:   GetLanguageManager().GetPrimary(),
 		command: &cobra.Command{
-			SilenceErrors: true, // 禁止打印错误
-			SilenceUsage:  true, // 禁止打印使用说明
+			Use:           cfg.Basic.Name, // 设置命令名称
+			SilenceErrors: true,           // 禁止打印错误
+			SilenceUsage:  true,           // 禁止打印使用说明
 		},
 	}
 
@@ -81,7 +88,7 @@ func (c *Cli) setupVersion() {
 		}
 
 		c.command.Version = version
-		c.command.Flags().BoolP("version", "v", false, c.lang.Command.VersionDesc)
+		c.command.Flags().BoolP("version", "v", false, c.lang.UI.Version.Description)
 	}
 
 	// 如果有构建信息，重写版本命令
@@ -102,7 +109,10 @@ func (c *Cli) setupService() {
 	}
 }
 
-// 基础命令方法
+// ============================================================================
+// 基础命令管理方法
+// 用于管理命令的基本操作：添加子命令、获取命令信息、命令组管理等
+// ============================================================================
 
 // AddCommand 添加一个或多个子命令到当前命令
 func (c *Cli) AddCommand(cmds ...*Command) {
@@ -155,13 +165,18 @@ func (c *Cli) ContainsGroup(groupID string) bool {
 // Context 返回命令的上下文
 // 如果未设置，则返回 background context
 func (c *Cli) Context() context.Context {
-	return c.command.Context()
+	if ctx := c.command.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
-// 执行相关方法
+// ============================================================================
+// 命令执行控制方法
+// 用于执行命令和控制命令执行流程
+// ============================================================================
 
-// Execute 执行命令
-// 这是启动应用程序的主要入口点
+// Execute 执行命令，这是启动应用程序的主要入口点
 func (c *Cli) Execute() error {
 	return c.ExecuteContext(c.config.ctx)
 }
@@ -183,7 +198,10 @@ func (c *Cli) ExecuteContextC(ctx context.Context) (*Command, error) {
 	return c.command.ExecuteContextC(ctx)
 }
 
-// 标志相关方法
+// ============================================================================
+// 标志参数管理方法
+// 用于管理命令行标志和参数
+// ============================================================================
 
 // Flag 获取指定名称的命令行标志
 func (c *Cli) Flag(name string) *Flag {
@@ -265,7 +283,209 @@ func (c *Cli) PersistentFlags() *FlagSet {
 	return c.command.PersistentFlags()
 }
 
-// Shell补全相关方法
+// ============================================================================
+// 便捷标志导出方法
+// 用于导出标志给外部包使用，支持过滤和批量操作
+// ============================================================================
+
+// defaultSystemFlags 返回 Cobra 系统默认标志列表
+// 这些标志通常不应该传递给外部业务包
+func getDefaultSystemFlags() map[string]bool {
+	return map[string]bool{
+		// 帮助系统
+		"help": true,
+		"h":    true,
+
+		// 版本系统
+		"version": true,
+		"v":       true,
+
+		// 补全系统 - 标准补全命令
+		"completion": true,
+		"complete":   true,
+
+		// 补全系统 - Shell 特定补全
+		"completion-bash":       true,
+		"completion-zsh":        true,
+		"completion-fish":       true,
+		"completion-powershell": true,
+		"gen-completion":        true,
+
+		// 补全系统 - 内部调试标志
+		"__complete":       true,
+		"__completeNoDesc": true,
+		"no-descriptions":  true,
+
+		// 补全系统 - 传统/兼容性标志
+		"bash-completion":       true,
+		"zsh-completion":        true,
+		"fish-completion":       true,
+		"powershell-completion": true,
+
+		// 内部调试和开发标志
+		"debug-completion": true,
+		"trace-completion": true,
+
+		// 配置系统常见标志（可能由框架自动添加）
+		"config-help":     true,
+		"print-config":    true,
+		"validate-config": true,
+	}
+}
+
+// flagFilter 统一的标志过滤器
+type flagFilter struct {
+	excluded map[string]bool
+}
+
+// newFlagFilter 创建新的标志过滤器
+func newFlagFilter(additionalExcludes ...string) *flagFilter {
+	excluded := getDefaultSystemFlags()
+
+	// 添加用户指定的排除标志
+	for _, flag := range additionalExcludes {
+		excluded[flag] = true
+	}
+
+	return &flagFilter{excluded: excluded}
+}
+
+// shouldInclude 检查标志是否应该包含
+func (f *flagFilter) shouldInclude(flagName string) bool {
+	return !f.excluded[flagName]
+}
+
+// createFilteredFlagSet 创建过滤后的标志集合
+func (f *flagFilter) createFilteredFlagSet(source *FlagSet, name string) *FlagSet {
+	filtered := pflag.NewFlagSet(name, pflag.ContinueOnError)
+
+	source.VisitAll(func(flag *pflag.Flag) {
+		if f.shouldInclude(flag.Name) {
+			filtered.AddFlag(flag)
+		}
+	})
+
+	return filtered
+}
+
+// getExcludedFlags 返回当前排除的标志列表（用于调试）
+func (f *flagFilter) getExcludedFlags() []string {
+	var excluded []string
+	for flag := range f.excluded {
+		excluded = append(excluded, flag)
+	}
+	return excluded
+}
+
+// GetAllFlagSets 返回所有标志集合的切片，便于传递给外部包
+// 返回顺序：[本地标志, 持久标志, 继承标志]
+func (c *Cli) GetAllFlagSets() []*FlagSet {
+	var flagSets []*FlagSet
+
+	if c.HasLocalFlags() {
+		flagSets = append(flagSets, c.LocalFlags())
+	}
+
+	if c.HasPersistentFlags() {
+		flagSets = append(flagSets, c.PersistentFlags())
+	}
+
+	if c.HasInheritedFlags() {
+		flagSets = append(flagSets, c.InheritedFlags())
+	}
+
+	return flagSets
+}
+
+// GetBindableFlagSets 返回适用于绑定的标志集合，自动排除常见的系统标志
+// excludeFlags: 额外需要排除的标志名称
+func (c *Cli) GetBindableFlagSets(excludeFlags ...string) []*FlagSet {
+	filter := newFlagFilter(excludeFlags...)
+	var filteredFlagSets []*FlagSet
+	allFlagSets := c.GetAllFlagSets()
+
+	for i, flagSet := range allFlagSets {
+		filtered := filter.createFilteredFlagSet(flagSet, fmt.Sprintf("filtered-%d", i))
+
+		// 只有当过滤后的标志集不为空时才添加
+		if filtered.HasFlags() {
+			filteredFlagSets = append(filteredFlagSets, filtered)
+		}
+	}
+
+	return filteredFlagSets
+}
+
+// GetFilteredFlags 返回过滤后的单个标志集合，包含所有非排除的标志
+func (c *Cli) GetFilteredFlags(excludeFlags ...string) *FlagSet {
+	filter := newFlagFilter(excludeFlags...)
+	return filter.createFilteredFlagSet(c.Flags(), "filtered-all")
+}
+
+// ExportFlagsForViper 导出适用于 Viper 绑定的标志集合
+// 这是一个便捷方法，返回可以直接用于 WithBindPFlags 的标志数组
+func (c *Cli) ExportFlagsForViper(excludeFlags ...string) []*FlagSet {
+	return c.GetBindableFlagSets(excludeFlags...)
+}
+
+// GetFlagNames 返回所有标志的名称列表
+func (c *Cli) GetFlagNames(includeInherited bool) []string {
+	var names []string
+	nameSet := make(map[string]bool)
+
+	// 收集本地和持久标志
+	c.Flags().VisitAll(func(flag *pflag.Flag) {
+		if !nameSet[flag.Name] {
+			names = append(names, flag.Name)
+			nameSet[flag.Name] = true
+		}
+	})
+
+	// 如果需要，添加继承的标志
+	if includeInherited {
+		c.InheritedFlags().VisitAll(func(flag *pflag.Flag) {
+			if !nameSet[flag.Name] {
+				names = append(names, flag.Name)
+				nameSet[flag.Name] = true
+			}
+		})
+	}
+
+	return names
+}
+
+// GetFilteredFlagNames 返回过滤后的标志名称列表
+func (c *Cli) GetFilteredFlagNames(excludeFlags ...string) []string {
+	filter := newFlagFilter(excludeFlags...)
+	var names []string
+	nameSet := make(map[string]bool)
+
+	c.Flags().VisitAll(func(flag *pflag.Flag) {
+		if filter.shouldInclude(flag.Name) && !nameSet[flag.Name] {
+			names = append(names, flag.Name)
+			nameSet[flag.Name] = true
+		}
+	})
+
+	return names
+}
+
+// GetSystemFlags 返回当前被排除的系统标志列表（调试用）
+func (c *Cli) GetSystemFlags() []string {
+	filter := newFlagFilter()
+	return filter.getExcludedFlags()
+}
+
+// IsSystemFlag 检查指定标志是否为系统标志
+func (c *Cli) IsSystemFlag(flagName string) bool {
+	systemFlags := getDefaultSystemFlags()
+	return systemFlags[flagName]
+}
+
+// ============================================================================
+// 命令行补全方法
+// 用于生成各种Shell的命令行补全脚本
+// ============================================================================
 
 // GenBashCompletion 生成 Bash 补全脚本并写入指定的 Writer
 func (c *Cli) GenBashCompletion(w io.Writer) error {
@@ -338,7 +558,10 @@ func (c *Cli) GenZshCompletionNoDesc(w io.Writer) error {
 	return c.command.GenZshCompletionNoDesc(w)
 }
 
-// 标志标记相关方法
+// ============================================================================
+// 标志标记和验证方法
+// 用于标记标志的特殊属性和验证规则
+// ============================================================================
 
 // MarkFlagCustom 为指定标志添加自定义补全函数
 func (c *Cli) MarkFlagCustom(name string, f string) error {
@@ -400,7 +623,10 @@ func (c *Cli) MarkZshCompPositionalArgumentWords(argPosition int, words ...strin
 	return c.command.MarkZshCompPositionalArgumentWords(argPosition, words...)
 }
 
-// 输入输出相关方法
+// ============================================================================
+// 输入输出管理方法
+// 用于管理命令的输入输出流和打印功能
+// ============================================================================
 
 // InOrStdin 返回命令的输入流，默认为标准输入
 func (c *Cli) InOrStdin() io.Reader {
@@ -447,7 +673,10 @@ func (c *Cli) Println(i ...interface{}) {
 	c.command.Println(i...)
 }
 
-// 设置相关方法
+// ============================================================================
+// 配置和模板方法
+// 用于配置命令的行为、模板和处理函数
+// ============================================================================
 
 // SetArgs 设置命令的参数
 func (c *Cli) SetArgs(a []string) {
@@ -515,6 +744,8 @@ func (c *Cli) SetOut(newOut io.Writer) {
 }
 
 // SetOutput 设置命令的输出流（同时影响标准输出和错误输出）
+//
+// Deprecated: Use SetOut and/or SetErr instead
 func (c *Cli) SetOutput(output io.Writer) {
 	c.command.SetOutput(output)
 }
@@ -534,7 +765,10 @@ func (c *Cli) SetVersionTemplate(s string) {
 	c.command.SetVersionTemplate(s)
 }
 
-// 其他功能性方法
+// ============================================================================
+// 查询和状态方法
+// 用于查询命令的状态和属性信息
+// ============================================================================
 
 // GlobalNormalizationFunc 返回全局标志名称规范化函数
 func (c *Cli) GlobalNormalizationFunc() func(f *FlagSet, name string) NormalizedName {
@@ -739,4 +973,18 @@ func (c *Cli) VersionTemplate() string {
 // VisitParents 访问所有父命令
 func (c *Cli) VisitParents(fn func(*Command)) {
 	c.command.VisitParents(fn)
+}
+
+// Done 返回一个通道，当服务应该停止时会关闭
+// 这为用户提供了优雅处理服务生命周期的方式
+func (c *Cli) Done() <-chan struct{} {
+	// 如果有服务管理器，返回其上下文的Done通道
+	ctx := c.Context()
+	return ctx.Done()
+}
+
+// SetServiceRunning 设置服务运行状态（内部使用）
+// 用于在服务启动时传递正确的上下文
+func (c *Cli) SetServiceRunning(running bool) {
+	// 预留接口，用于将来的服务状态管理
 }

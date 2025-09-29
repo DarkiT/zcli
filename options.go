@@ -27,9 +27,9 @@ type Service struct {
 
 // Runtime 运行时配置
 type Runtime struct {
-	Run       func()       // 启动函数，用于调用上层服务主函数
-	Stop      []func()     // 停止函数，用于停止服务时调用上层停止函数
-	BuildInfo *VersionInfo // 构建信息
+	Run       func(...context.Context) // 启动函数，支持可变 context 参数：f() 或 f(ctx)
+	Stop      []func()                 // 停止函数，用于停止服务时调用上层停止函数
+	BuildInfo *VersionInfo             // 构建信息
 }
 
 // Config 统一配置结构
