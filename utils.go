@@ -119,31 +119,6 @@ func isColorSupported() bool {
 }
 
 // ============================================================================
-// 字符串处理工具函数
-// ============================================================================
-
-// trimVersion 清理版本字符串，移除前导的'v'
-func trimVersion(version string) string {
-	return strings.TrimLeft(version, "v")
-}
-
-// ensurePrefix 确保字符串有指定前缀
-func ensurePrefix(s, prefix string) string {
-	if strings.HasPrefix(s, prefix) {
-		return s
-	}
-	return prefix + s
-}
-
-// ensureSuffix 确保字符串有指定后缀
-func ensureSuffix(s, suffix string) string {
-	if strings.HasSuffix(s, suffix) {
-		return s
-	}
-	return s + suffix
-}
-
-// ============================================================================
 // 环境检测工具函数
 // ============================================================================
 

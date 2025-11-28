@@ -11,10 +11,10 @@ import (
 )
 
 const logo = `
-███████╗████████╗ ██████╗  ██████╗ ██╗     
-╚══███╔╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     
-  ███╔╝    ██║   ██║   ██║██║   ██║██║     
- ███╔╝     ██║   ██║   ██║██║   ██║██║     
+███████╗████████╗ ██████╗  ██████╗ ██╗
+╚══███╔╝╚══██╔══╝██╔═══██╗██╔═══██╗██║
+  ███╔╝    ██║   ██║   ██║██║   ██║██║
+ ███╔╝     ██║   ██║   ██║██║   ██║██║
 ███████╗   ██║   ╚██████╔╝╚██████╔╝███████╗
 ╚══════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝
 `
@@ -22,15 +22,15 @@ const logo = `
 func main() {
 	workDir, _ := os.UserHomeDir()
 
-	// 使用新的context方式创建应用
+	// 使用新的服务配置方式
 	app := zcli.NewBuilder("zh").
 		WithLogo(logo).
 		WithName("demoapp").
 		WithDisplayName("【演示应用】").
 		WithDescription("这是一个演示优雅服务控制的应用").
-		WithSystemService(runService, stopService). // 使用context版本的runService
+		WithService(runService, stopService). // 使用新的 WithService 方法
 		WithVersion("1.0.5").
-		WithGitInfo("abc123", "master", "v1.0.5").
+		WithGitInfo("89447cf2c914ea19d06c30d155d1f6202dbdc54c ", "master", "v1.0.5").
 		WithWorkDir(workDir).
 		WithEnvVar("ENV", "prod").
 		WithDebug(true).
@@ -50,14 +50,8 @@ func main() {
 	}
 }
 
-// runService 服务主函数 - 使用可变context参数优雅处理生命周期
-func runService(ctxs ...context.Context) {
-	// 现代最佳实践：使用第一个context
-	if len(ctxs) == 0 {
-		slog.Info("没有context传入，使用默认行为")
-		return
-	}
-	ctx := ctxs[0]
+// runService 服务主函数 - 标准签名：func(ctx context.Context) error
+func runService(ctx context.Context) error {
 	slog.Info("服务已启动，等待停止信号...")
 
 	// 创建定时器
@@ -69,21 +63,22 @@ func runService(ctxs ...context.Context) {
 		select {
 		case <-ctx.Done():
 			slog.Info("收到停止信号，准备退出服务循环")
-			return
+			return nil
 		case <-ticker.C:
 			slog.Info("服务正在运行...")
 		}
 	}
 }
 
-// stopService 服务停止函数 - 执行清理工作
-func stopService() {
+// stopService 服务停止函数 - 标准签名：func() error
+func stopService() error {
 	slog.Info("执行服务清理工作...")
 
 	// 模拟清理工作
 	time.Sleep(100 * time.Millisecond)
 
 	slog.Info("服务清理完成，已安全停止")
+	return nil
 }
 
 // 添加配置管理命令

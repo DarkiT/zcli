@@ -236,8 +236,8 @@ func (lm *LanguageManager) getTextFromLanguage(lang *Language, path string) stri
 	// 使用反射获取嵌套字段的值
 	value := reflect.ValueOf(lang).Elem()
 	for _, part := range parts {
-		// 将首字母大写以匹配结构体字段
-		fieldName := strings.Title(part)
+		// 将首字母大写以匹配结构体字段，保持剩余部分原样以支持驼峰字段
+		fieldName := toPascal(part)
 		value = value.FieldByName(fieldName)
 		if !value.IsValid() {
 			return ""
@@ -249,6 +249,14 @@ func (lm *LanguageManager) getTextFromLanguage(lang *Language, path string) stri
 	}
 
 	return ""
+}
+
+// toPascal 将字符串首字母大写，其余部分保持原样，用于匹配 Go 导出的结构字段名
+func toPascal(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // validateLanguage 验证语言包完整性

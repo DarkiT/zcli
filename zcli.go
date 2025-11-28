@@ -30,7 +30,7 @@ func (c *Cli) addRootCommand(rootCmd *cobra.Command) {
 	c.addHelpCommand(rootCmd)
 
 	// 设置控制台颜色支持
-	if c.config.Basic.NoColor || !isColorSupported() {
+	if c.config.basic.NoColor || !isColorSupported() {
 		color.NoColor = true
 	}
 
@@ -119,10 +119,10 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 
 // showVersion 显示版本信息
 func (c *Cli) showVersion(buf *strings.Builder) {
-	if c.config.Runtime.BuildInfo != nil {
-		buf.WriteString(c.colors.Description.Sprint(c.config.Runtime.BuildInfo.String()))
-	} else if c.config.Basic.Version != "" {
+	if c.config.runtime.BuildInfo != nil {
+		buf.WriteString(c.colors.Description.Sprint(c.config.runtime.BuildInfo.String()))
+	} else if c.config.basic.Version != "" {
 		const versionFormat = "Version: %s\n"
-		buf.WriteString(c.colors.Description.Sprintf(versionFormat, c.config.Basic.Version))
+		buf.WriteString(c.colors.Description.Sprintf(versionFormat, c.config.basic.Version))
 	}
 }

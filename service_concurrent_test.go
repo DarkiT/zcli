@@ -11,11 +11,12 @@ import (
 func TestServiceConcurrentStartStop(t *testing.T) {
 	// 创建测试用的CLI配置
 	config := NewConfig()
-	config.Basic.Name = "test-service"
-	config.Basic.DisplayName = "Test Service"
-	config.Runtime.Run = func(ctxs ...context.Context) {
+	config.basic.Name = "test-service"
+	config.basic.DisplayName = "Test Service"
+	config.runtime.Run = func(ctx context.Context) error {
 		// 模拟服务运行，等待一段时间
 		time.Sleep(100 * time.Millisecond)
+		return nil
 	}
 
 	// 创建CLI实例
@@ -81,9 +82,10 @@ func TestServiceConcurrentStartStop(t *testing.T) {
 // TestServiceChannelRaceCondition 专门测试exitChan的竞态条件修复
 func TestServiceChannelRaceCondition(t *testing.T) {
 	config := NewConfig()
-	config.Basic.Name = "race-test-service"
-	config.Runtime.Run = func(ctxs ...context.Context) {
+	config.basic.Name = "race-test-service"
+	config.runtime.Run = func(ctx context.Context) error {
 		time.Sleep(50 * time.Millisecond)
+		return nil
 	}
 
 	cli := &Cli{
@@ -125,10 +127,11 @@ func TestServiceChannelRaceCondition(t *testing.T) {
 // TestServiceContextCancellation 测试上下文取消时的并发安全性
 func TestServiceContextCancellation(t *testing.T) {
 	config := NewConfig()
-	config.Basic.Name = "context-test-service"
-	config.Runtime.Run = func(ctxs ...context.Context) {
+	config.basic.Name = "context-test-service"
+	config.runtime.Run = func(ctx context.Context) error {
 		// 模拟长时间运行的服务
 		time.Sleep(1 * time.Second)
+		return nil
 	}
 
 	cli := &Cli{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -109,6 +110,7 @@ func (ve *ValidationError) Unwrap() []error {
 // BaseService 提供默认的服务实现，用户可以嵌入此结构体
 type BaseService struct {
 	config   ServiceConfig
+	mu       sync.Mutex
 	running  bool
 	stopChan chan struct{}
 	onStop   []func() error
@@ -133,11 +135,14 @@ func (bs *BaseService) Name() string {
 
 // Run 运行服务的默认实现，子类应该重写此方法
 func (bs *BaseService) Run(ctx context.Context) error {
+	bs.mu.Lock()
 	if bs.running {
+		bs.mu.Unlock()
 		return errors.New("服务已在运行")
 	}
+	bs.running = true
+	bs.mu.Unlock()
 
-	bs.setRunning(true)
 	defer bs.setRunning(false)
 
 	// 默认实现：等待上下文取消或停止信号
@@ -151,9 +156,13 @@ func (bs *BaseService) Run(ctx context.Context) error {
 
 // Stop 停止服务
 func (bs *BaseService) Stop() error {
+	bs.mu.Lock()
 	if !bs.running {
+		bs.mu.Unlock()
 		return nil
 	}
+	bs.running = false
+	bs.mu.Unlock()
 
 	// 执行停止回调
 	var errs []error
@@ -164,13 +173,14 @@ func (bs *BaseService) Stop() error {
 	}
 
 	// 关闭停止通道
+	bs.mu.Lock()
 	select {
 	case <-bs.stopChan:
 		// 已经关闭
 	default:
 		close(bs.stopChan)
 	}
-	bs.running = false
+	bs.mu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("停止服务时发生错误: %v", errs)
@@ -185,6 +195,8 @@ func (bs *BaseService) AddStopHandler(handler func() error) {
 
 // IsRunning 检查服务是否正在运行
 func (bs *BaseService) IsRunning() bool {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
 	return bs.running
 }
 
@@ -195,7 +207,9 @@ func (bs *BaseService) WaitForStop() <-chan struct{} {
 
 // setRunning 设置运行状态（内部使用）
 func (bs *BaseService) setRunning(running bool) {
+	bs.mu.Lock()
 	bs.running = running
+	bs.mu.Unlock()
 }
 
 // =============================================================================
@@ -236,11 +250,14 @@ func NewFuncService(config ServiceConfig, runFunc func(context.Context) error, s
 
 // Run 运行服务
 func (fs *FuncService) Run(ctx context.Context) error {
+	fs.mu.Lock()
 	if fs.running {
+		fs.mu.Unlock()
 		return errors.New("服务已在运行")
 	}
+	fs.running = true
+	fs.mu.Unlock()
 
-	fs.setRunning(true)
 	defer fs.setRunning(false)
 
 	// 创建合并的上下文
@@ -330,7 +347,7 @@ func (ms *ManagedService) Run(ctx context.Context) error {
 		}
 
 		// 停止服务
-		if err := ms.ServiceRunner.Stop(); err != nil {
+		if err := ms.Stop(); err != nil {
 			return fmt.Errorf("停止服务失败: %w", err)
 		}
 

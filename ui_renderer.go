@@ -48,9 +48,9 @@ func (r *uiRenderer) renderHelp(cc *cobra.Command, args []string) {
 // renderLogo 渲染Logo部分
 func (r *uiRenderer) renderLogo(buf *strings.Builder, cc *cobra.Command) {
 	// Logo只在根命令显示
-	if r.cli.config.Basic.Logo != "" && cc.Parent() == nil {
+	if r.cli.config.basic.Logo != "" && cc.Parent() == nil {
 		buf.WriteString(separator)
-		buf.WriteString(r.colors.Logo.Sprint(strings.TrimSpace(r.cli.config.Basic.Logo)))
+		buf.WriteString(r.colors.Logo.Sprint(strings.TrimSpace(r.cli.config.basic.Logo)))
 
 		// Version
 		if r.cli.command.Version != "" {
@@ -187,7 +187,7 @@ func (r *uiRenderer) groupCommands(cc *cobra.Command) ([]*cobra.Command, []*cobr
 }
 
 // renderCommandGroup 渲染命令组
-func (r *uiRenderer) renderCommandGroup(buf *strings.Builder, cmds []*cobra.Command, isSystem bool) {
+func (r *uiRenderer) renderCommandGroup(buf *strings.Builder, cmds []*cobra.Command, _ bool) {
 	for _, cmd := range cmds {
 		cmdLine := indent + r.colors.SubCommand.Sprintf("%-*s", spacing-len(indent), cmd.Name())
 		buf.WriteString(cmdLine)

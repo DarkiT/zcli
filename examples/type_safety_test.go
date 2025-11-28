@@ -12,38 +12,56 @@ import (
 	"github.com/darkit/zcli"
 )
 
-func wrongSignatureFunc(a, b int) {
-	// 错误的函数签名
+func wrongSignatureFunc(a, b int) error {
+	// 错误的函数签名 - 参数不匹配
+	return nil
 }
 
-func correctModernFunc(ctx context.Context) {
-	// 正确的现代API函数签名
+func wrongReturnFunc(ctx context.Context) {
+	// 错误的函数签名 - 缺少错误返回
 }
 
-func correctLegacyFunc() {
-	// 正确的传统API函数签名
+func correctRunFunc(ctx context.Context) error {
+	// 正确的运行函数签名
+	return nil
+}
+
+func correctStopFunc() error {
+	// 正确的停止函数签名
+	return nil
+}
+
+func wrongStopFunc() {
+	// 错误的停止函数签名 - 缺少错误返回
 }
 
 func main() {
-	// 正确用法示例
+	// ✅ 正确用法 - 完整配置
 	app1 := zcli.NewBuilder().
-		WithSystemService(correctModernFunc).
+		WithService(correctRunFunc, correctStopFunc).
 		Build()
 
+	// ✅ 正确用法 - 仅配置运行函数（停止函数可选）
 	app2 := zcli.NewBuilder().
-		WithSystemServiceLegacy(correctLegacyFunc).
+		WithService(correctRunFunc).
 		Build()
-
-	// ❌ 错误用法 - 应该编译失败
-	// app3 := zcli.NewBuilder().
-	//     WithSystemService(wrongSignatureFunc).  // 类型不匹配
-	//     Build()
 
 	// ❌ 错误用法 - 应该编译失败
 	// app4 := zcli.NewBuilder().
-	//     WithSystemServiceLegacy(correctModernFunc).  // 类型不匹配
+	//     WithService(wrongSignatureFunc, correctStopFunc).  // 类型不匹配
+	//     Build()
+
+	// ❌ 错误用法 - 应该编译失败
+	// app5 := zcli.NewBuilder().
+	//     WithService(wrongReturnFunc, correctStopFunc).  // 类型不匹配
+	//     Build()
+
+	// ❌ 错误用法 - 应该编译失败
+	// app6 := zcli.NewBuilder().
+	//     WithService(correctRunFunc, wrongStopFunc).  // 类型不匹配
 	//     Build()
 
 	_ = app1
+	_ = app2
 	_ = app2
 }

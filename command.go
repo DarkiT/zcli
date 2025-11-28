@@ -40,8 +40,8 @@ func NewCli(opts ...Option) *Cli {
 	}
 
 	// 设置语言
-	if cfg.Basic.Language != "" {
-		_ = SetLanguage(cfg.Basic.Language)
+	if cfg.basic.Language != "" {
+		_ = SetLanguage(cfg.basic.Language)
 	}
 
 	cmd := &Cli{
@@ -49,15 +49,15 @@ func NewCli(opts ...Option) *Cli {
 		colors: newColors(),
 		lang:   GetLanguageManager().GetPrimary(),
 		command: &cobra.Command{
-			Use:           cfg.Basic.Name, // 设置命令名称
+			Use:           cfg.basic.Name, // 设置命令名称
 			SilenceErrors: true,           // 禁止打印错误
 			SilenceUsage:  true,           // 禁止打印使用说明
 		},
 	}
 
 	// 如果写了服务描述则把服务描述作为命令描述
-	if cmd.config.Basic.Description != "" {
-		cmd.command.Short = cmd.config.Basic.Description
+	if cmd.config.basic.Description != "" {
+		cmd.command.Short = cmd.config.basic.Description
 	}
 
 	// 设置版本信息
@@ -74,16 +74,16 @@ func NewCli(opts ...Option) *Cli {
 // setupVersion 设置版本信息
 func (c *Cli) setupVersion() {
 	// 添加版本标志
-	if c.config.Runtime.BuildInfo != nil || c.config.Basic.Version != "" {
+	if c.config.runtime.BuildInfo != nil || c.config.basic.Version != "" {
 		// 优先使用 BuildInfo.Version，如果需要可以被 Basic.Version 覆盖
 		version := ""
-		if c.config.Runtime.BuildInfo != nil {
-			version = c.config.Runtime.BuildInfo.Version
+		if c.config.runtime.BuildInfo != nil {
+			version = c.config.runtime.BuildInfo.Version
 		}
-		if c.config.Basic.Version != "" {
-			version = c.config.Basic.Version       // 允许覆盖
-			if c.config.Runtime.BuildInfo != nil { // 如果有 BuildInfo 则同步更新
-				c.config.Runtime.BuildInfo.Version = c.config.Basic.Version // 同步更新 BuildInfo
+		if c.config.basic.Version != "" {
+			version = c.config.basic.Version       // 允许覆盖
+			if c.config.runtime.BuildInfo != nil { // 如果有 BuildInfo 则同步更新
+				c.config.runtime.BuildInfo.Version = c.config.basic.Version // 同步更新 BuildInfo
 			}
 		}
 
@@ -92,7 +92,7 @@ func (c *Cli) setupVersion() {
 	}
 
 	// 如果有构建信息，重写版本命令
-	if c.config.Runtime.BuildInfo != nil {
+	if c.config.runtime.BuildInfo != nil {
 		var buf strings.Builder
 		defer buf.Reset()
 		c.showVersion(&buf)
@@ -103,7 +103,7 @@ func (c *Cli) setupVersion() {
 // setupService 设置服务相关功能
 func (c *Cli) setupService() {
 	// 只有同时设置了 Name 和 Run 函数才初始化服务
-	if c.config.Basic.Name != "" && c.config.Runtime.Run != nil {
+	if c.config.basic.Name != "" && c.config.runtime.Run != nil {
 		// 如果配置了服务名称和启动函数则初始化服务
 		c.initService()
 	}
@@ -987,4 +987,30 @@ func (c *Cli) Done() <-chan struct{} {
 // 用于在服务启动时传递正确的上下文
 func (c *Cli) SetServiceRunning(running bool) {
 	// 预留接口，用于将来的服务状态管理
+}
+
+// Command 返回底层的 cobra.Command 指针
+// 用于需要直接操作 Cobra 原生 API 的高级场景
+//
+// 示例：
+//
+//	cmd := app.Command()
+//	cmd.AddCommand(customCmd)
+//	cmd.PreRun = func(cmd *cobra.Command, args []string) {
+//	    // 自定义预运行逻辑
+//	}
+func (c *Cli) Command() *cobra.Command {
+	return c.command
+}
+
+// Config 返回配置的副本（用于调试）
+// 注意：返回的是副本，修改不会影响原配置
+func (c *Cli) Config() Config {
+	clone := Config{ctx: c.config.ctx}
+
+	clone.basic = cloneBasicPtr(c.config.basic)
+	clone.service = cloneServicePtr(c.config.service)
+	clone.runtime = cloneRuntimePtr(c.config.runtime)
+
+	return clone
 }

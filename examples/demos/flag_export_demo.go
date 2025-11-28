@@ -27,7 +27,7 @@ func main() {
 	app := zcli.NewBuilder("zh").
 		WithName("flag-demo").
 		WithDescription("重构后的标志导出功能演示").
-		WithVersion("2.0.0").
+		WithVersion("0.2.0.0").
 		Build()
 
 	// 添加各种类型的标志

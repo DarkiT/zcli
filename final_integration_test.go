@@ -103,7 +103,7 @@ func TestAllPhasesCompleted(t *testing.T) {
 	// 阶段1：并发安全问题修复
 	t.Run("Phase1_ConcurrencySafety", func(t *testing.T) {
 		// 验证Service配置结构体创建
-		service := &Service{}
+		service := &ServiceConfig{}
 		// Service 结构体应该可以正常创建
 		if service.Username == "" && service.WorkDir == "" {
 			// 空的Service配置是有效的，可以后续设置

@@ -47,7 +47,7 @@
 //	        WithDescription("这是一个示例应用").
 //	        WithVersion("1.0.0").
 //	        WithWorkDir(workDir).
-//	        WithSystemService(run, stop).
+//	        WithService(run, stop).
 //	        Build()
 //
 //	    // 执行应用
@@ -82,7 +82,7 @@
 //
 //	app := zcli.NewBuilder("zh").
 //	    WithName("myapp").
-//	    WithSystemService(run, stop).
+//	    WithService(run, stop).
 //	    Build()
 //
 // Cli: 命令行应用对象，封装了cobra.Command

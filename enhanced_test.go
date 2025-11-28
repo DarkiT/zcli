@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -40,7 +41,7 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 
 		cli := NewBuilder("zh").
 			WithName("service-test").
-			WithSimpleService("service-test", serviceFunc, stopFunc).
+			WithService(serviceFunc, stopFunc).
 			Build()
 
 		if cli.Name() != "service-test" {
@@ -49,11 +50,11 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 
 		// 这里我们无法直接测试服务运行，因为它需要完整的服务管理器
 		// 但我们可以验证配置是否正确设置
-		if cli.config.Runtime.Run == nil {
+		if cli.config.runtime.Run == nil {
 			t.Error("期望设置了运行函数")
 		}
 
-		if len(cli.config.Runtime.Stop) == 0 {
+		if cli.config.runtime.Stop == nil {
 			t.Error("期望设置了停止函数")
 		}
 	})
@@ -76,7 +77,7 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 		_, err = NewBuilder("zh").
 			// 缺少名称，应该验证失败
 			WithValidator(func(cfg *Config) error {
-				if cfg.Basic.Name == "" {
+				if cfg.basic.Name == "" {
 					return fmt.Errorf("名称不能为空")
 				}
 				return nil
@@ -110,18 +111,18 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 // TestServiceInterface 测试服务接口
 func TestServiceInterface(t *testing.T) {
 	t.Run("SimpleService创建", func(t *testing.T) {
-		runCalled := false
-		stopCalled := false
+		var runCalled atomic.Bool
+		var stopCalled atomic.Bool
 
 		service := NewSimpleService("test-service",
 			func(ctx context.Context) error {
-				runCalled = true
+				runCalled.Store(true)
 				// 等待上下文被取消
 				<-ctx.Done()
 				return ctx.Err()
 			},
 			func() error {
-				stopCalled = true
+				stopCalled.Store(true)
 				return nil
 			},
 		)
@@ -143,7 +144,7 @@ func TestServiceInterface(t *testing.T) {
 		// 等待服务开始运行
 		time.Sleep(10 * time.Millisecond)
 
-		if !runCalled {
+		if !runCalled.Load() {
 			t.Error("期望调用运行函数")
 		}
 
@@ -163,7 +164,7 @@ func TestServiceInterface(t *testing.T) {
 			t.Error("服务停止超时")
 		}
 
-		if !stopCalled {
+		if !stopCalled.Load() {
 			t.Error("期望调用停止函数")
 		}
 	})
