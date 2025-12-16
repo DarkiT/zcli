@@ -75,9 +75,9 @@ func NewServiceError(code ErrorCode, operation, service, message string) *Servic
 // Error 实现error接口
 func (se *ServiceError) Error() string {
 	if se.Service != "" {
-		return fmt.Sprintf("[%s] 服务 %s %s 失败: %s", se.Code, se.Service, se.Operation, se.Message)
+		return fmt.Sprintf("[%s] service %s %s failed: %s", se.Code, se.Service, se.Operation, se.Message)
 	}
-	return fmt.Sprintf("[%s] %s 失败: %s", se.Code, se.Operation, se.Message)
+	return fmt.Sprintf("[%s] %s failed: %s", se.Code, se.Operation, se.Message)
 }
 
 // WithCause 添加原因错误
@@ -238,25 +238,25 @@ func ErrServiceAlreadyRunning(service string) *ServiceError {
 	return NewError(ErrServiceRunning).
 		Service(service).
 		Operation("start").
-		Message("服务已在运行中").
+		Message("service is already running").
 		Build()
 }
 
-// ErrServiceAlreadyStopped 服务已停止错误
+// ErrServiceAlreadyStopped service already stopped错误
 func ErrServiceAlreadyStopped(service string) *ServiceError {
 	return NewError(ErrServiceStopped).
 		Service(service).
 		Operation("stop").
-		Message("服务已停止").
+		Message("service already stopped").
 		Build()
 }
 
-// ErrServiceNotInstalled 服务未安装错误
+// ErrServiceNotInstalled service is not installed错误
 func ErrServiceNotInstalled(service string) *ServiceError {
 	return NewError(ErrServiceNotFound).
 		Service(service).
 		Operation("status").
-		Message("服务未安装").
+		Message("service is not installed").
 		Build()
 }
 
@@ -265,7 +265,7 @@ func ErrServiceStartTimeout(service string, timeout time.Duration) *ServiceError
 	return NewError(ErrServiceTimeout).
 		Service(service).
 		Operation("start").
-		Messagef("服务启动超时（%v）", timeout).
+		Messagef("service start timeout (%v)", timeout).
 		Context("timeout", timeout.String()).
 		Build()
 }
@@ -275,12 +275,12 @@ func ErrServiceStopTimeout(service string, timeout time.Duration) *ServiceError 
 	return NewError(ErrServiceTimeout).
 		Service(service).
 		Operation("stop").
-		Messagef("服务停止超时（%v）", timeout).
+		Messagef("service stop timeout (%v)", timeout).
 		Context("timeout", timeout.String()).
 		Build()
 }
 
-// ErrConfigValidationFailed 配置验证失败错误
+// ErrConfigValidationFailed configuration validation failed错误
 func ErrConfigValidationFailed(details []error) *ServiceError {
 	var messages []string
 	for _, err := range details {
@@ -289,7 +289,7 @@ func ErrConfigValidationFailed(details []error) *ServiceError {
 
 	return NewError(ErrConfigValidation).
 		Operation("validate").
-		Message("配置验证失败").
+		Message("configuration validation failed").
 		Context("details", messages).
 		Context("count", len(details)).
 		Build()
@@ -299,7 +299,7 @@ func ErrConfigValidationFailed(details []error) *ServiceError {
 func ErrPermissionDenied(path string, required, current string) *ServiceError {
 	return NewError(ErrPermission).
 		Operation("permission_check").
-		Messagef("权限不足，路径: %s", path).
+		Messagef("insufficient permission, path: %s", path).
 		Context("path", path).
 		Context("required", required).
 		Context("current", current).
@@ -310,7 +310,7 @@ func ErrPermissionDenied(path string, required, current string) *ServiceError {
 func ErrPathNotExists(path string) *ServiceError {
 	return NewError(ErrPathNotFound).
 		Operation("path_check").
-		Messagef("路径不存在: %s", path).
+		Messagef("path does not exist: %s", path).
 		Context("path", path).
 		Build()
 }

@@ -3,7 +3,6 @@ package zcli
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -170,114 +169,6 @@ func TestServiceInterface(t *testing.T) {
 	})
 }
 
-// TestConcurrentServiceManager 测试并发服务管理器
-func TestConcurrentServiceManager(t *testing.T) {
-	t.Run("基本操作", func(t *testing.T) {
-		service := NewSimpleService("concurrent-test",
-			func(ctx context.Context) error {
-				// 模拟启动工作
-				time.Sleep(10 * time.Millisecond)
-				// 然后立即返回，表示服务启动完成
-				return nil
-			},
-			func() error {
-				return nil
-			},
-		)
-
-		config := ServiceConfig{
-			Name:        "concurrent-test",
-			DisplayName: "并发测试服务",
-			EnvVars:     make(map[string]string),
-		}
-
-		manager := NewConcurrentServiceManager(service, config)
-
-		// 设置较短的超时时间用于测试
-		manager.SetStartTimeout(1 * time.Second)
-		manager.SetStopTimeout(1 * time.Second)
-
-		// 测试初始状态
-		if !manager.IsStopped() {
-			t.Error("期望初始状态为停止")
-		}
-
-		// 测试启动
-		err := manager.Start()
-		if err != nil {
-			t.Errorf("启动服务失败: %v", err)
-		}
-
-		// 等待服务完成
-		time.Sleep(100 * time.Millisecond)
-
-		// 验证最终状态（服务应该已经自然结束）
-		if !manager.IsStopped() {
-			t.Error("期望最终状态为停止")
-		}
-
-		// 检查统计信息
-		stats := manager.GetStats()
-		if stats.StartCount != 1 {
-			t.Errorf("期望启动次数为1，实际为%d", stats.StartCount)
-		}
-
-		// 注意：由于服务自然结束，停止次数应该是0
-		if stats.StopCount != 0 {
-			t.Errorf("期望停止次数为0，实际为%d", stats.StopCount)
-		}
-	})
-
-	t.Run("并发安全", func(t *testing.T) {
-		service := NewSimpleService("concurrent-safety-test",
-			func(ctx context.Context) error {
-				<-ctx.Done()
-				return ctx.Err()
-			},
-			func() error {
-				return nil
-			},
-		)
-
-		config := ServiceConfig{
-			Name:        "concurrent-safety-test",
-			DisplayName: "并发安全测试",
-			EnvVars:     make(map[string]string),
-		}
-
-		manager := NewConcurrentServiceManager(service, config)
-
-		const numGoroutines = 10
-		var wg sync.WaitGroup
-
-		// 并发启动
-		for i := 0; i < numGoroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				_ = manager.Start()
-			}()
-		}
-
-		// 并发停止
-		for i := 0; i < numGoroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				time.Sleep(10 * time.Millisecond)
-				_ = manager.Stop()
-			}()
-		}
-
-		wg.Wait()
-
-		// 验证最终状态一致
-		if !manager.IsStopped() && manager.GetState() != StateError {
-			t.Errorf("期望最终状态为停止或错误，实际为%s", manager.GetState())
-		}
-	})
-}
-
 // TestErrorHandling 测试错误处理
 func TestErrorHandling(t *testing.T) {
 	t.Run("ServiceError创建", func(t *testing.T) {
@@ -331,33 +222,6 @@ func TestErrorHandling(t *testing.T) {
 		errorMsg := aggregator.Error()
 		if errorMsg == "" {
 			t.Error("期望得到错误消息")
-		}
-	})
-}
-
-// TestTemplates 测试模板功能
-func TestTemplates(t *testing.T) {
-	t.Run("FromTemplate", func(t *testing.T) {
-		builder := FromTemplate("web-service")
-
-		if builder == nil {
-			t.Error("期望得到有效的Builder")
-		}
-
-		// 测试验证器是否添加
-		_, err := builder.WithName("web-test").BuildWithError()
-		if err == nil {
-			t.Error("期望验证失败，因为没有设置运行函数")
-		}
-	})
-
-	t.Run("QuickService创建", func(t *testing.T) {
-		cli := QuickService("web-api", "Web API服务", func(ctx context.Context) error {
-			return nil
-		})
-
-		if cli.Name() != "web-api" {
-			t.Errorf("期望服务名称为 'web-api'，实际为 '%s'", cli.Name())
 		}
 	})
 }

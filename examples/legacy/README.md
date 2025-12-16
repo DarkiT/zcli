@@ -5,16 +5,13 @@
 ## 📁 文件说明
 
 ### api_compatibility_demo.go
-
 API 兼容性演示，展示：
-
 - 优雅的可变参数设计
 - 向下兼容的传统用法
 - 现代 context 最佳实践
-- 单一 API 多种调用方式
+- 单一API多种调用方式
 
 **运行方式：**
-
 ```bash
 cd examples/legacy
 
@@ -31,19 +28,17 @@ go run api_compatibility_demo.go --help
 ## 🎯 设计理念
 
 ### 优雅的可变参数设计
-
 ```go
 // 统一API
-WithService(func(...context.Context), ...func())
+WithSystemService(func(...context.Context), ...func())
 
 // 支持三种调用方式：
 // 1. 传统：func() - 忽略参数
-// 2. 现代：func(ctx) - 使用第一个context
+// 2. 现代：func(ctx) - 使用第一个context  
 // 3. 高级：func(ctx1, ctx2) - 多context扩展
 ```
 
 ### 向下兼容策略
-
 ```go
 // 传统风格 - 无需修改现有代码
 func legacyService(ctxs ...context.Context) {
@@ -67,21 +62,18 @@ func modernService(ctxs ...context.Context) {
 
 ## 🚀 技术演进
 
-### 第一阶段：双 API 设计
-
-- `WithService()` - 现代 API
-- `WithServiceLegacy()` - 传统 API
-- 问题：API 分裂，维护复杂
+### 第一阶段：双API设计
+- `WithSystemService()` - 现代API
+- `WithSystemServiceLegacy()` - 传统API
+- 问题：API分裂，维护复杂
 
 ### 第二阶段：智能分派
-
 - 运行时类型检查
 - 自动选择合适的调用方式
 - 问题：运行时开销，类型不安全
 
 ### 第三阶段：优雅可变参数（最终方案）
-
-- 单一 API：`func(...context.Context)`
+- 单一API：`func(...context.Context)`
 - 编译时类型安全
 - 完全向下兼容
 - 支持未来扩展
@@ -91,17 +83,16 @@ func modernService(ctxs ...context.Context) {
 > "func(...context.Context) 的本质是 []context.Context"
 
 这个深刻洞察启发了最优雅的解决方案：
-
-- 0 个参数 → 传统模式
-- 1 个参数 → 现代模式
+- 0个参数 → 传统模式
+- 1个参数 → 现代模式  
 - 多个参数 → 高级扩展
 
 ## 🎉 最终成果
 
-1. **API 统一**：单一方法，多种用法
+1. **API统一**：单一方法，多种用法
 2. **类型安全**：编译时检查
 3. **完全兼容**：现有代码零修改
 4. **易于扩展**：支持未来高级用法
-5. **优雅简洁**：符合 Go 设计哲学
+5. **优雅简洁**：符合Go设计哲学
 
-这是 API 设计的最高境界：**简洁、优雅、强大**。
+这是API设计的最高境界：**简洁、优雅、强大**。 

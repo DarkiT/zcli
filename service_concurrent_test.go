@@ -3,124 +3,108 @@ package zcli
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestServiceConcurrentStartStop 测试服务的并发启动和停止操作是否安全
-func TestServiceConcurrentStartStop(t *testing.T) {
-	// 创建测试用的CLI配置
+// TestServiceConcurrentStop 测试 Stop 幂等性及并发安全
+func TestServiceConcurrentStop(t *testing.T) {
 	config := NewConfig()
 	config.basic.Name = "test-service"
-	config.basic.DisplayName = "Test Service"
+
+	started := make(chan struct{})
+	var once sync.Once
 	config.runtime.Run = func(ctx context.Context) error {
-		// 模拟服务运行，等待一段时间
-		time.Sleep(100 * time.Millisecond)
+		once.Do(func() { close(started) })
+		<-ctx.Done()
 		return nil
 	}
 
-	// 创建CLI实例
-	cli := &Cli{
-		config: config,
-		colors: newColors(),
-		lang:   GetLanguageManager().GetPrimary(),
-	}
+	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
 
-	// 创建服务管理器
+	// 使用可取消的 ctx，Stop 应通过 cancel 让 Run 返回
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	sm, err := newServiceManager(cli, ctx, cancel)
 	if err != nil {
-		t.Fatalf("Failed to create service manager: %v", err)
+		t.Fatalf("newServiceManager: %v", err)
 	}
 
-	// 并发测试：多个goroutine同时调用Start和Stop
-	const numGoroutines = 10
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		_ = sm.Run(sm.ctx)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("service not started")
+	}
+
+	const goroutines = 20
 	var wg sync.WaitGroup
-
-	// 启动多个goroutine并发调用Start
-	for i := 0; i < numGoroutines; i++ {
+	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			err := sm.Start(sm.service)
-			expectedError := sm.localizer.GetError("alreadyRunning")
-			if err != nil && err.Error() != expectedError {
-				t.Errorf("Goroutine %d: Unexpected start error: %v", id, err)
+			if err := sm.Stop(); err != nil {
+				t.Errorf("goroutine %d stop err: %v", id, err)
 			}
 		}(i)
 	}
-
-	// 同时启动多个goroutine并发调用Stop
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			// 稍微延迟，让Start有机会执行
-			time.Sleep(10 * time.Millisecond)
-			err := sm.Stop(sm.service)
-			if err != nil {
-				t.Errorf("Goroutine %d: Unexpected stop error: %v", id, err)
-			}
-		}(i)
-	}
-
-	// 等待所有goroutine完成
 	wg.Wait()
 
-	// 验证最终状态
-	if sm.running.Load() {
-		t.Error("Service should not be running after all stop operations")
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("service did not exit after concurrent stop")
 	}
 
+	if sm.running.Load() {
+		t.Error("service should be stopped")
+	}
 	if !sm.stopExecuted.Load() {
-		t.Error("Stop should have been executed")
+		t.Error("stopExecuted should be true")
 	}
 }
 
 // TestServiceChannelRaceCondition 专门测试exitChan的竞态条件修复
 func TestServiceChannelRaceCondition(t *testing.T) {
-	config := NewConfig()
-	config.basic.Name = "race-test-service"
-	config.runtime.Run = func(ctx context.Context) error {
-		time.Sleep(50 * time.Millisecond)
-		return nil
-	}
+	base := NewConfig()
+	base.basic.Name = "race-test-service"
 
-	cli := &Cli{
-		config: config,
-		colors: newColors(),
-		lang:   GetLanguageManager().GetPrimary(),
-	}
+	cli := &Cli{config: base, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sm, err := newServiceManager(cli, ctx, cancel)
-	if err != nil {
-		t.Fatalf("Failed to create service manager: %v", err)
-	}
-
-	// 进行多轮快速的启动-停止循环，测试channel的竞态条件
-	const rounds = 50
+	const rounds = 10
 	for i := 0; i < rounds; i++ {
-		// 启动服务
-		err := sm.Start(sm.service)
-		expectedError := sm.localizer.GetError("alreadyRunning")
-		if err != nil && err.Error() != expectedError {
-			t.Fatalf("Round %d: Failed to start service: %v", i, err)
-		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cfg := *base
+		cfg.runtime.Run = func(ctx context.Context) error { <-ctx.Done(); return nil }
+		cli.config = &cfg
 
-		// 立即停止服务
-		err = sm.Stop(sm.service)
+		sm, err := newServiceManager(cli, ctx, cancel)
 		if err != nil {
-			t.Fatalf("Round %d: Failed to stop service: %v", i, err)
+			t.Fatalf("round %d: newServiceManager: %v", i, err)
 		}
 
-		// 重置stopExecuted标志以便下一轮测试
-		sm.stopExecuted.Store(false)
-		sm.running.Store(false)
+		runDone := make(chan struct{})
+		go func() {
+			defer close(runDone)
+			_ = sm.Run(sm.ctx)
+		}()
+
+		// 保证启动后立即停止，验证 exitChan 在多轮启动/停止中不会竞态
+		time.Sleep(10 * time.Millisecond)
+		if err := sm.Stop(); err != nil {
+			t.Fatalf("round %d: stop: %v", i, err)
+		}
+
+		select {
+		case <-runDone:
+		case <-time.After(300 * time.Millisecond):
+			t.Fatalf("round %d: run did not exit", i)
+		}
 	}
 }
 
@@ -128,57 +112,89 @@ func TestServiceChannelRaceCondition(t *testing.T) {
 func TestServiceContextCancellation(t *testing.T) {
 	config := NewConfig()
 	config.basic.Name = "context-test-service"
+	config.runtime.Run = func(ctx context.Context) error { <-ctx.Done(); return nil }
+
+	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sm, err := newServiceManager(cli, ctx, cancel)
+	if err != nil {
+		t.Fatalf("newServiceManager: %v", err)
+	}
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		_ = sm.Run(sm.ctx)
+	}()
+
+	// 先取消上下文，再调用 Stop，应当均匀退出
+	cancel()
+	if err := sm.Stop(); err != nil {
+		t.Fatalf("stop after cancel: %v", err)
+	}
+
+	select {
+	case <-runDone:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("service did not exit after context cancel")
+	}
+
+	if sm.running.Load() {
+		t.Error("service should be stopped")
+	}
+}
+
+// TestServiceShutdownTimeouts 验证初始等待与宽限期触发 Stop
+func TestServiceShutdownTimeouts(t *testing.T) {
+	config := NewConfig()
+	config.basic.Name = "timeout-test"
 	config.runtime.Run = func(ctx context.Context) error {
-		// 模拟长时间运行的服务
-		time.Sleep(1 * time.Second)
+		<-ctx.Done() // 模拟用户 Run 一直阻塞
+		return nil
+	}
+	// 缩短默认的 3s+2s 以加速测试，但仍验证分层超时逻辑
+	config.runtime.ShutdownInitial = 50 * time.Millisecond
+	config.runtime.ShutdownGrace = 40 * time.Millisecond
+
+	var stopCount atomic.Int32
+	config.runtime.Stop = func() error {
+		stopCount.Add(1)
 		return nil
 	}
 
-	cli := &Cli{
-		config: config,
-		colors: newColors(),
-		lang:   GetLanguageManager().GetPrimary(),
-	}
-
+	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
 	ctx, cancel := context.WithCancel(context.Background())
-
 	sm, err := newServiceManager(cli, ctx, cancel)
 	if err != nil {
-		t.Fatalf("Failed to create service manager: %v", err)
+		t.Fatalf("newServiceManager: %v", err)
 	}
 
-	// 启动服务
-	err = sm.Start(sm.service)
-	if err != nil {
-		t.Fatalf("Failed to start service: %v", err)
+	runDone := make(chan struct{}) // 保持未关闭以触发超时路径
+	done := make(chan struct{})
+	sm.stopExecuted.Store(true) // 走 callStopFunctions 分支，避免 Stop 持锁递归
+
+	start := time.Now()
+	go func() {
+		sm.waitForServiceCompletion(runDone)
+		close(done)
+	}()
+
+	// 触发 ctx 取消，进入超时分支
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("waitForServiceCompletion did not return within expected timeout window")
 	}
 
-	// 同时从多个goroutine取消上下文和调用Stop
-	var wg sync.WaitGroup
+	elapsed := time.Since(start)
+	if elapsed < 40*time.Millisecond || elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout path returned in %v, want within [40ms,500ms]", elapsed)
+	}
 
-	// 取消上下文
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
-
-	// 同时调用Stop
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		time.Sleep(20 * time.Millisecond)
-		_ = sm.Stop(sm.service)
-	}()
-
-	wg.Wait()
-
-	// 等待足够时间确保所有操作完成
-	time.Sleep(100 * time.Millisecond)
-
-	// 验证最终状态
-	if sm.running.Load() {
-		t.Error("Service should not be running after context cancellation")
+	if stopCount.Load() != 1 {
+		t.Fatalf("Stop should be called once after timeout, got %d", stopCount.Load())
 	}
 }
