@@ -46,38 +46,38 @@ func (sc *ServiceConfig) Validate() error {
 
 	// 验证必需字段
 	if sc.Name == "" {
-		errs = append(errs, errors.New("服务名称不能为空"))
+		errs = append(errs, errors.New("service name is required"))
 	}
 	if len(sc.Name) < 3 || len(sc.Name) > 50 {
-		errs = append(errs, errors.New("服务名称长度必须在3-50个字符之间"))
+		errs = append(errs, errors.New("service name length must be between 3 and 50 characters"))
 	}
 
 	if sc.DisplayName == "" {
-		errs = append(errs, errors.New("显示名称不能为空"))
+		errs = append(errs, errors.New("display name is required"))
 	}
 	if len(sc.DisplayName) > 100 {
-		errs = append(errs, errors.New("显示名称不能超过100个字符"))
+		errs = append(errs, errors.New("display name must not exceed 100 characters"))
 	}
 
 	// 验证可选字段
 	if len(sc.Description) > 500 {
-		errs = append(errs, errors.New("描述不能超过500个字符"))
+		errs = append(errs, errors.New("description must not exceed 500 characters"))
 	}
 
 	// 验证依赖项
 	for i, dep := range sc.Dependencies {
 		if dep == "" {
-			errs = append(errs, fmt.Errorf("依赖项[%d]不能为空", i))
+			errs = append(errs, fmt.Errorf("dependency[%d] must not be empty", i))
 		}
 	}
 
 	// 验证环境变量
 	for key, value := range sc.EnvVars {
 		if key == "" {
-			errs = append(errs, errors.New("环境变量键不能为空"))
+			errs = append(errs, errors.New("environment variable key is required"))
 		}
 		if value == "" {
-			errs = append(errs, fmt.Errorf("环境变量[%s]的值不能为空", key))
+			errs = append(errs, fmt.Errorf("environment variable[%s] value is required", key))
 		}
 	}
 
@@ -94,9 +94,9 @@ type ValidationError struct {
 
 func (ve *ValidationError) Error() string {
 	if len(ve.Errors) == 1 {
-		return fmt.Sprintf("配置验证失败: %v", ve.Errors[0])
+		return fmt.Sprintf("configuration validation failed: %v", ve.Errors[0])
 	}
-	return fmt.Sprintf("配置验证失败，共%d个错误: %v", len(ve.Errors), ve.Errors[0])
+	return fmt.Sprintf("configuration validation failed, %d error(s): %v", len(ve.Errors), ve.Errors[0])
 }
 
 func (ve *ValidationError) Unwrap() []error {
@@ -119,7 +119,7 @@ type BaseService struct {
 // NewBaseService 创建基础服务实例
 func NewBaseService(config ServiceConfig) (*BaseService, error) {
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("创建服务失败: %w", err)
+		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
 
 	return &BaseService{
@@ -138,7 +138,7 @@ func (bs *BaseService) Run(ctx context.Context) error {
 	bs.mu.Lock()
 	if bs.running {
 		bs.mu.Unlock()
-		return errors.New("服务已在运行")
+		return errors.New("service already running")
 	}
 	bs.running = true
 	bs.mu.Unlock()
@@ -183,7 +183,7 @@ func (bs *BaseService) Stop() error {
 	bs.mu.Unlock()
 
 	if len(errs) > 0 {
-		return fmt.Errorf("停止服务时发生错误: %v", errs)
+		return fmt.Errorf("errors occurred while stopping service: %v", errs)
 	}
 	return nil
 }
@@ -231,7 +231,7 @@ func NewFuncService(config ServiceConfig, runFunc func(context.Context) error, s
 	}
 
 	if runFunc == nil {
-		return nil, errors.New("运行函数不能为空")
+		return nil, errors.New("run function must not be nil")
 	}
 
 	fs := &FuncService{
@@ -253,7 +253,7 @@ func (fs *FuncService) Run(ctx context.Context) error {
 	fs.mu.Lock()
 	if fs.running {
 		fs.mu.Unlock()
-		return errors.New("服务已在运行")
+		return errors.New("service already running")
 	}
 	fs.running = true
 	fs.mu.Unlock()
@@ -445,7 +445,7 @@ func (ts *TimeoutService) Stop() error {
 	case err := <-errChan:
 		return err
 	case <-time.After(ts.stopTimeout):
-		return fmt.Errorf("停止服务超时（%v）", ts.stopTimeout)
+		return fmt.Errorf("service stop timeout (%v)", ts.stopTimeout)
 	}
 }
 

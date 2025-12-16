@@ -12,23 +12,18 @@ import (
 	"syscall"
 	"time"
 
-	service "github.com/darkit/syscore"
+	service "github.com/darkit/daemon"
 	"github.com/spf13/cobra"
 )
 
 // initService 初始化服务
 func (c *Cli) initService() {
-	// 创建带信号处理的上下文
-	ctx, cancel := signal.NotifyContext(
-		c.config.ctx,    // 使用用户配置的上下文，而不是直接使用background
-		syscall.SIGINT,  // Ctrl+C
-		syscall.SIGTERM, // 终止信号
-		syscall.SIGQUIT, // 退出信号
-	)
-	c.config.ctx = ctx
+	// 使用外部上下文，信号处理由 service.RunWait 负责
+	ctx, cancel := context.WithCancel(c.config.ctx)
 
 	// 检查是否设置了服务运行函数
 	if c.config.runtime.Run == nil {
+		cancel()
 		return
 	}
 
@@ -50,31 +45,15 @@ func (c *Cli) initService() {
 func (c *Cli) setupSignalHandler(sm *sManager) {
 	<-c.config.ctx.Done()
 
-	// 确保服务停止（增加对 stopExecuted 的检查，避免重复调用）
-	if sm != nil && sm.running.Load() && !sm.stopExecuted.Load() {
-		_ = sm.Stop(sm.service)
-	} else if sm != nil && sm.stopExecuted.Load() {
-		// 如果 Stop 已经被调用过，则跳过重复调用，仅执行用户定义的停止函数
-		// 直接调用用户注册的停止函数，确保它们被执行
-		c.executeStopFunctions()
+	// 15 秒强制退出兜底
+	if sm == nil {
+		return
 	}
-
-	// 如果服务没有及时退出，强制结束进程
-	if sm != nil {
-		timeoutMsg := sm.localizer.FormatError("timeout", 15)
-		sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
-	}
+	timeoutMsg := sm.localizer.FormatError("timeout", 15)
+	sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
 }
 
 // executeStopFunctions 执行所有已注册的停止函数
-func (c *Cli) executeStopFunctions() {
-	if c.config.runtime.Stop != nil {
-		if err := c.config.runtime.Stop(); err != nil {
-			// 记录停止错误，但不阻止程序继续
-			_, _ = c.colors.Error.Printf("停止函数执行错误: %v\n", err)
-		}
-	}
-}
 
 // addServiceCommands 添加服务管理命令
 func (c *Cli) addServiceCommands(sm *sManager) {
@@ -103,18 +82,19 @@ func (c *Cli) addServiceCommands(sm *sManager) {
 	}
 }
 
-// sManager 服务管理器，封装service库的底层功能
+// sManager 服务管理器，基于 ServiceRunner 接口实现
 type sManager struct {
-	commands     *Cli               // CLI实例引用
-	localizer    *ServiceLocalizer  // 服务本地化器
-	ctx          context.Context    // 上下文，用于控制服务生命周期
-	cancel       context.CancelFunc // 取消函数
-	mu           sync.RWMutex       // 互斥锁，保证并发安全
-	config       *service.Config    // 服务配置
-	service      service.Service    // 服务实例
-	exitChan     chan struct{}      // 退出通道
-	running      atomic.Bool        // 运行状态标记
-	stopExecuted atomic.Bool        // 停止方法执行标记
+	commands     *Cli
+	localizer    *ServiceLocalizer
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.RWMutex
+	config       *service.Config
+	service      service.Service
+	exitChan     chan struct{}
+	running      atomic.Bool
+	stopExecuted atomic.Bool
+	stopFuncOnce atomic.Bool
 }
 
 // newServiceManager 创建服务管理器实例
@@ -139,125 +119,143 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 		cancel() // 取消上下文
 		return nil, fmt.Errorf(localizer.FormatError("createConfig")+": %v", err)
 	}
+
+	// 设置 RunWait 选项，由我们接管信号处理
+	if config.Option == nil {
+		config.Option = make(service.KeyValue)
+	}
+	signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+	if runtime.GOOS != "windows" {
+		signals = append(signals, syscall.SIGQUIT)
+	}
+	config.Option["RunWait"] = func() {
+		sigCtx, stop := signal.NotifyContext(context.Background(), signals...)
+		defer stop()
+		ctx := sm.getCtx()
+		select {
+		case <-sigCtx.Done():
+			// 捕获外部信号后主动触发停止逻辑，确保 sm.ctx 被取消
+			_ = sm.Stop()
+		case <-ctx.Done():
+		}
+	}
+
 	sm.config = config
 
-	// 创建服务实例
-	svc, err := service.New(sm, config)
+	// 创建 ServiceRunner（daemon 包）并绑定 StopFunc，Run 与 CLI 上下文绑定
+	svcRunner := sm.buildRunner()
+
+	// 创建服务实例（采用 Runner 适配）
+	svc, err := service.New(svcRunner, config)
 	if err != nil {
 		cancel() // 取消上下文
 		return nil, fmt.Errorf(localizer.FormatError("createService")+": %v", err)
 	}
 	sm.service = svc
 
-	// 设置上下文监听器，当上下文取消时执行停止函数
-	go func() {
-		<-ctx.Done()
-		// 如果服务正在运行且尚未执行过停止操作，执行停止函数
-		if sm.running.Load() && !sm.stopExecuted.Load() {
-			_ = sm.Stop(sm.service)
-
-			// 确保退出应用程序，防止卡死
-			timeoutMsg := localizer.FormatError("timeout", 15)
-			sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
-		}
-	}()
-
 	return sm, nil
 }
 
-// Start 实现 service.Interface 接口，支持前台和服务模式
-func (sm *sManager) Start(s service.Service) error {
-	// 重置停止标志
-	sm.stopExecuted.Store(false)
-
-	// 防止重复启动
-	if sm.running.Load() {
-		return fmt.Errorf("%s", sm.localizer.GetError("alreadyRunning"))
+// buildRunner 构造符合 daemon 的 ServiceRunner
+func (sm *sManager) buildRunner() *service.ServiceRunner {
+	return &service.ServiceRunner{
+		RunFunc: func(_ context.Context) error {
+			return sm.Run(sm.getCtx())
+		},
+		StopFunc: func(_ context.Context) error {
+			return sm.Stop()
+		},
 	}
+}
 
-	// 使用互斥锁保护 exitChan 的访问和修改
+// getCtx 安全获取当前运行上下文，避免读写竞态
+func (sm *sManager) getCtx() context.Context {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.ctx
+}
+
+// Run 实现 ServiceRunner 接口
+func (sm *sManager) Run(ctx context.Context) error {
+	// 将 daemon 传入的 ctx 包装为可取消上下文，确保 Stop 能正确触发 runService 的 ctx.Done()
+	runCtx, runCancel := context.WithCancel(ctx)
+
 	sm.mu.Lock()
-	// 安全地检查和重新创建退出通道
+	sm.ctx = runCtx
+	sm.cancel = runCancel
+	// 退出通道每次运行前重置
 	select {
 	case <-sm.exitChan:
-		// 通道已关闭，重新创建
 		sm.exitChan = make(chan struct{})
 	default:
-		// 通道未关闭，不需要操作
 	}
-	// 获取当前的 exitChan 引用，防止在使用过程中被其他 goroutine 修改
-	exitChan := sm.exitChan
-	sm.mu.Unlock()
-
-	// 标记为运行状态
+	sm.stopExecuted.Store(false)
 	sm.running.Store(true)
+	sm.mu.Unlock()
+	defer runCancel()
 
-	// 启动主服务
-	go func() {
-		defer sm.running.Store(false)
+	// 兜底：若 runCtx 被取消但业务未退出，15s 后强制结束
+	go func(runCtx context.Context) {
+		<-runCtx.Done()
+		timeoutMsg := sm.localizer.FormatError("timeout", 15)
+		sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
+	}(runCtx)
 
-		// 执行用户定义的运行函数
-		if sm.commands.config.runtime.Run != nil {
-			// 调用新的标准签名：func(ctx context.Context) error
-			if err := sm.commands.config.runtime.Run(sm.ctx); err != nil {
-				// 记录运行错误
-				_, _ = sm.localizer.colors.Error.Printf("服务运行错误: %v\n", err)
-			}
+	defer sm.running.Store(false)
+
+	if sm.commands.config.runtime.Run != nil {
+		if err := sm.commands.config.runtime.Run(runCtx); err != nil {
+			_, _ = sm.localizer.colors.Error.Printf("服务运行错误: %v\n", err)
 		}
+	}
 
-		// 监听退出信号
-		select {
-		case <-exitChan:
-			// 收到退出通道信号
-		case <-sm.ctx.Done():
-			// 上下文取消
-		}
+	// 等待退出信号或上下文取消
+	select {
+	case <-sm.exitChan:
+	case <-ctx.Done():
+	}
 
-		// 如果是交互式模式，自动停止服务
-		if service.Interactive() && !sm.stopExecuted.Load() {
-			_ = sm.Stop(s)
-		}
-	}()
-
+	// 交互模式下补偿停止
+	if service.Interactive() && !sm.stopExecuted.Load() {
+		_ = sm.Stop()
+	}
 	return nil
 }
 
-// Stop 实现 service.Interface 接口，停止服务
-func (sm *sManager) Stop(s service.Service) error {
-	// 使用原子操作检查是否已经执行过停止操作
-	// 如果已经执行过，直接返回，不重复执行
+// Stop 实现 ServiceRunner 接口
+func (sm *sManager) Stop() error {
 	if sm.stopExecuted.Swap(true) {
 		return nil
 	}
 
-	// 如果没有在运行，直接返回
-	if !sm.running.Load() {
-		return nil
-	}
-
-	// 执行用户定义的停止函数 - 先执行这一步确保用户的停止逻辑被执行
-	if sm.commands.config.runtime.Stop != nil {
+	// 执行用户停止函数一次；若未提供停止函数则给出提示
+	if sm.commands.config.runtime.Stop != nil && !sm.stopFuncOnce.Swap(true) {
 		if err := sm.commands.config.runtime.Stop(); err != nil {
-			// 记录停止错误但不阻止程序继续
 			_, _ = sm.localizer.colors.Error.Printf("停止函数执行错误: %v\n", err)
 		}
+	} else if sm.commands.config.runtime.Stop == nil && !sm.stopFuncOnce.Swap(true) {
+		sm.localizer.LogWarning("%s", "未配置停止函数，跳过清理逻辑")
 	}
 
-	// 使用互斥锁和原子操作保护退出通道的关闭操作
+	// 取消上下文
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	if sm.cancel != nil {
+		sm.cancel()
+	}
 	select {
 	case <-sm.exitChan:
-		// 通道已关闭，不需要操作
 	default:
-		// 安全地关闭退出信号通道
 		close(sm.exitChan)
 	}
+	sm.mu.Unlock()
 
-	// 标记为非运行状态
 	sm.running.Store(false)
-
 	return nil
+}
+
+// Name 返回服务名称
+func (sm *sManager) Name() string {
+	return sm.commands.config.basic.Name
 }
 
 // createServiceConfig 创建服务配置
@@ -344,19 +342,27 @@ func (sm *sManager) executeRunCommand(_ *cobra.Command, args []string) error {
 		serviceArgs = sm.commands.config.service.Arguments
 	}
 
+	sm.mu.Lock()
+	// 每次执行 run 前重建子上下文，确保取消信号能传递到当前 service
+	if sm.cancel != nil {
+		sm.cancel()
+	}
+	sm.ctx, sm.cancel = context.WithCancel(sm.commands.config.ctx)
+
 	// 如果有参数变化，重新创建服务实例
 	if len(serviceArgs) > 0 {
-		sm.mu.Lock()
 		sm.config.Arguments = serviceArgs
-		svc, err := service.New(sm, sm.config)
+		svc, err := service.New(sm.buildRunner(), sm.config)
 		if err != nil {
+			// 避免泄漏新创建的上下文
+			sm.cancel()
 			sm.mu.Unlock()
 			sm.localizer.LogError("createService", err)
 			return fmt.Errorf(sm.localizer.FormatError("createService")+": %v", err)
 		}
 		sm.service = svc
-		sm.mu.Unlock()
 	}
+	sm.mu.Unlock()
 
 	// 重置状态
 	sm.stopExecuted.Store(false)
@@ -425,23 +431,21 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 			if !sm.stopExecuted.Load() {
 				sm.localizer.LogWarning("%s", sm.localizer.GetError("timeoutWarning"))
 				// 如果尚未执行过，则调用 Stop 方法
-				_ = sm.Stop(sm.service)
+				_ = sm.Stop()
 			} else {
 				// 如果已经执行过 Stop，则直接调用停止函数
 				sm.callStopFunctions()
 			}
 
-			// 再等待2秒
+			// 再等待用户停止逻辑和额外宽限时间
 			select {
 			case <-runDone:
 				// 在额外调用stop后成功退出
 				return
 
 			case <-time.After(graceWait):
-				// 总计5秒后仍未退出，标记为已停止
+				// 若用户 Stop 耗时超出宽限，仅记录警告，状态由运行 goroutine 最终更新
 				sm.localizer.LogWarning("%s", sm.localizer.GetError("forceTerminate"))
-				sm.running.Store(false)
-				sm.stopExecuted.Store(true)
 				return
 			}
 		}
@@ -475,7 +479,7 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 
 		// 创建服务实例
 		if sm.service == nil {
-			svc, createErr := service.New(sm, sm.config)
+			svc, createErr := service.New(sm.buildRunner(), sm.config)
 			if createErr != nil {
 				return fmt.Errorf(sm.localizer.FormatError("createService")+": %v", createErr)
 			}
@@ -656,21 +660,29 @@ func checkPermissions(path string, requiredPerm os.FileMode, localizer *ServiceL
 		return fmt.Errorf("%s", localizer.FormatError("getPathInfo", err))
 	}
 
-	// 检查是否有足够的权限
 	currentPerm := fileInfo.Mode() & os.ModePerm
 
-	// 对于可执行文件，检查是否有执行权限
-	if requiredPerm&0o111 != 0 && currentPerm&0o111 == 0 {
-		return fmt.Errorf("%s", localizer.FormatError("insufficientPerm",
-			fmt.Sprintf("%o", requiredPerm),
-			fmt.Sprintf("%o", currentPerm)))
+	// 路径类型校验：仅在显式要求目录时校验
+	if requiredPerm&os.ModeDir != 0 && !fileInfo.IsDir() {
+		return fmt.Errorf("%s", localizer.FormatError("needDir", path))
 	}
 
-	// 对于目录，检查是否有读写权限
-	if fileInfo.IsDir() && requiredPerm&0o600 != 0 && currentPerm&0o600 == 0 {
-		return fmt.Errorf("%s", localizer.FormatError("insufficientPerm",
-			fmt.Sprintf("%o", requiredPerm),
-			fmt.Sprintf("%o", currentPerm)))
+	// 分别检查读/写/执行权限，更清晰地提示缺失项
+	type permCheck struct {
+		bit  os.FileMode
+		name string
+	}
+	checks := []permCheck{
+		{0o400, "read"},
+		{0o200, "write"},
+		{0o100, "exec"},
+	}
+	for _, p := range checks {
+		if requiredPerm&p.bit != 0 && currentPerm&p.bit == 0 {
+			return fmt.Errorf("%s", localizer.FormatError("insufficientPerm",
+				p.name,
+				fmt.Sprintf("%o", currentPerm)))
+		}
 	}
 
 	return nil

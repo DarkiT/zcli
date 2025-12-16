@@ -161,6 +161,8 @@ func (b *Builder) WithService(run RunFunc, stop ...StopFunc) *Builder {
 	} else {
 		b.config.runtime.Stop = nil
 	}
+	// 重置 ServiceRunner，保持与新的 run/stop 同步
+	b.service = nil
 	return b
 }
 
@@ -204,9 +206,15 @@ func (b *Builder) Build() *Cli {
 		return b.cli
 	}
 
+	// 若使用 ServiceRunner，确保 runtime 与之同步
+	if b.service != nil {
+		b.config.runtime.Run = b.service.Run
+		b.config.runtime.Stop = b.service.Stop
+	}
+
 	// 执行验证
 	if err := b.validate(); err != nil {
-		panic(fmt.Sprintf("构建失败: %v", err))
+		panic(fmt.Sprintf("build failed: %v", err))
 	}
 
 	if b.cli == nil {
@@ -223,9 +231,14 @@ func (b *Builder) BuildWithError() (*Cli, error) {
 		return b.cli, nil
 	}
 
+	if b.service != nil {
+		b.config.runtime.Run = b.service.Run
+		b.config.runtime.Stop = b.service.Stop
+	}
+
 	// 执行验证
 	if err := b.validate(); err != nil {
-		return nil, fmt.Errorf("构建失败: %w", err)
+		return nil, fmt.Errorf("build failed: %w", err)
 	}
 
 	if b.cli == nil {
@@ -242,12 +255,12 @@ func (b *Builder) validate() error {
 
 	// 基本验证
 	if b.config.basic.Name == "" {
-		errs = append(errs, errors.New("应用名称不能为空"))
+		errs = append(errs, errors.New("application name is required"))
 	}
 
 	// 服务相关验证
 	if b.config.runtime.Run != nil && b.config.basic.Name == "" {
-		errs = append(errs, errors.New("配置了服务但未设置服务名称"))
+		errs = append(errs, errors.New("service name must be set when service is configured"))
 	}
 
 	// 执行自定义验证器
@@ -273,7 +286,7 @@ func (be *BuildError) Error() string {
 	if len(be.Errors) == 1 {
 		return be.Errors[0].Error()
 	}
-	return fmt.Sprintf("构建失败，共%d个错误: %v", len(be.Errors), be.Errors[0])
+	return fmt.Sprintf("build failed, %d error(s): %v", len(be.Errors), be.Errors[0])
 }
 
 func (be *BuildError) Unwrap() []error {
@@ -286,7 +299,7 @@ func (be *BuildError) Unwrap() []error {
 
 // QuickService 快速创建服务应用（新签名）
 func QuickService(name, displayName string, run RunFunc) *Cli {
-	return NewBuilder("zh").
+	return NewBuilder("en").
 		WithName(name).
 		WithDisplayName(displayName).
 		WithService(run).
@@ -309,40 +322,6 @@ func QuickCLI(name, displayName, description string) *Cli {
 		WithDisplayName(displayName).
 		WithDescription(description).
 		Build()
-}
-
-// FromTemplate 从模板创建Builder
-func FromTemplate(template string) *Builder {
-	b := NewBuilder("zh")
-
-	switch template {
-	case "web-service":
-		return b.WithValidator(func(cfg *Config) error {
-			if cfg.runtime.Run == nil {
-				return errors.New("web服务必须设置运行函数")
-			}
-			return nil
-		})
-	case "daemon":
-		return b.WithValidator(func(cfg *Config) error {
-			if cfg.basic.Name == "" {
-				return errors.New("daemon服务必须设置名称")
-			}
-			if cfg.runtime.Run == nil {
-				return errors.New("daemon服务必须设置运行函数")
-			}
-			return nil
-		})
-	case "cli-tool":
-		return b.WithValidator(func(cfg *Config) error {
-			if cfg.basic.Name == "" {
-				return errors.New("CLI工具必须设置名称")
-			}
-			return nil
-		})
-	default:
-		return b
-	}
 }
 
 // ===================================================================
