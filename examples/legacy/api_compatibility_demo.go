@@ -121,7 +121,7 @@ func printUsageInfo() {
 	fmt.Println("   - 符合Go最佳实践")
 	fmt.Println("   - 更好的资源管理")
 	fmt.Println()
-	fmt.Println("��� 关键优势：统一API、标准签名、类型安全、易于理解")
+	fmt.Println("关键优势：统一API、标准签名、类型安全、易于理解")
 	fmt.Println()
 }
 

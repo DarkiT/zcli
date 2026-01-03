@@ -3,6 +3,7 @@ package zcli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	service "github.com/darkit/daemon"
 	"github.com/spf13/cobra"
 )
+
+var exitFunc = os.Exit
 
 // initService 初始化服务
 func (c *Cli) initService() {
@@ -87,18 +90,18 @@ func (c *Cli) addServiceCommands(sm *sManager) {
 
 // sManager 服务管理器，基于 ServiceRunner 接口实现
 type sManager struct {
-	commands     *Cli
-	localizer    *ServiceLocalizer
-	ctx          context.Context
-	cancel       context.CancelFunc
-	mu           sync.RWMutex
-	config       *service.Config
-	service      service.Service
-	exitChan     chan struct{}
-	running      atomic.Bool
-	stopExecuted atomic.Bool
-	stopFuncOnce atomic.Bool
-	forceExitOnce atomic.Bool
+	commands       *Cli
+	localizer      *ServiceLocalizer
+	ctx            context.Context
+	cancel         context.CancelFunc
+	mu             sync.RWMutex
+	config         *service.Config
+	service        service.Service
+	exitChan       chan struct{}
+	running        atomic.Bool
+	stopExecuted   atomic.Bool
+	stopFuncOnce   atomic.Bool
+	forceExitOnce  atomic.Bool
 	forceExitTimer *time.Timer
 }
 
@@ -106,7 +109,13 @@ type sManager struct {
 func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc) (*sManager, error) {
 	// 创建服务本地化器
 	localizer := NewServiceLocalizer(GetLanguageManager(), cmd.colors)
-	localizer.ConfigureOutput(cmd.command.OutOrStdout(), cmd.command.ErrOrStderr(), cmd.config.basic.SilenceErrors, cmd.config.basic.SilenceUsage)
+	out := io.Writer(os.Stdout)
+	errOut := io.Writer(os.Stderr)
+	if cmd.command != nil {
+		out = cmd.command.OutOrStdout()
+		errOut = cmd.command.ErrOrStderr()
+	}
+	localizer.ConfigureOutput(out, errOut, cmd.config.basic.SilenceErrors, cmd.config.basic.SilenceUsage)
 
 	sm := &sManager{
 		commands:  cmd,
@@ -248,8 +257,6 @@ func (sm *sManager) Stop() error {
 			if err := sm.commands.config.runtime.Stop(); err != nil {
 				stopErr = err
 			}
-		} else {
-			sm.localizer.LogWarning("%s", "Stop function not configured, skipping cleanup logic")
 		}
 	}
 
@@ -429,7 +436,6 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 
 		// 如果是交互式模式，安全地关闭退出通道
 		sm.mu.Lock()
-		defer sm.mu.Unlock()
 		select {
 		case <-sm.exitChan:
 			// 通道已关闭，不需要操作
@@ -437,6 +443,7 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 			// 安全地关闭退出通道，通知服务停止
 			close(sm.exitChan)
 		}
+		sm.mu.Unlock()
 
 		// 使用超时机制等待服务退出
 		initialWait := sm.commands.config.runtime.ShutdownInitial
@@ -482,7 +489,6 @@ func (sm *sManager) callStopFunctions() {
 		return
 	}
 	if sm.commands.config.runtime.Stop == nil {
-		sm.localizer.LogWarning("%s", "Stop function not configured, skipping cleanup logic")
 		return
 	}
 	if err := sm.commands.config.runtime.Stop(); err != nil {
@@ -674,12 +680,15 @@ func (sm *sManager) ExitWithTimeout(timeout time.Duration, debugMsg string, exit
 		if debugMsg != "" {
 			_, _ = fmt.Fprintln(os.Stderr, debugMsg)
 		}
-		os.Exit(exitCode)
+		exitFunc(exitCode)
 	}()
 }
 
 func (sm *sManager) scheduleForceExit(timeout time.Duration) {
 	if timeout <= 0 {
+		return
+	}
+	if service.Interactive() {
 		return
 	}
 	if sm.forceExitOnce.Swap(true) {
@@ -694,7 +703,7 @@ func (sm *sManager) scheduleForceExit(timeout time.Duration) {
 			if msg != "" {
 				_, _ = fmt.Fprintln(os.Stderr, msg)
 			}
-			os.Exit(1)
+			exitFunc(1)
 		})
 	}
 	sm.mu.Unlock()

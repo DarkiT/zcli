@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/darkit/zcli"
@@ -29,6 +30,8 @@ func main() {
 		WithDisplayName("【演示应用】").
 		WithDescription("这是一个演示优雅服务控制的应用").
 		WithService(runService, stopService). // 使用新的 WithService 方法
+		WithServiceTimeouts(0, 5*time.Second). // 演示强制退出（停止超时）
+		WithShutdownTimeouts(1*time.Second, 1*time.Second).
 		WithVersion("1.0.5").
 		WithGitInfo("89447cf2c914ea19d06c30d155d1f6202dbdc54c ", "master", "v1.0.5").
 		WithWorkDir(workDir).
@@ -51,23 +54,41 @@ func main() {
 }
 
 // runService 服务主函数 - 标准签名：func(ctx context.Context) error
-func runService(ctx context.Context) error {
-	slog.Info("服务已启动，等待停止信号...")
+// 此示例故意忽略 ctx，用于验证无法优雅退出的场景
+func runService(_ context.Context) error {
+	slog.Info("服务启动中，初始化资源...")
 
-	// 创建定时器
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	initTimer := time.NewTimer(200 * time.Millisecond)
+	<-initTimer.C
 
-	// 服务主循环 - 使用context.Done()优雅处理停止
-	for {
+	jobs := make(chan int, 8)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for jobID := range jobs {
+			time.Sleep(150 * time.Millisecond)
+			slog.Info("处理任务", "id", jobID)
+		}
+	}()
+
+	producer := time.NewTicker(500 * time.Millisecond)
+	defer producer.Stop()
+
+	jobID := 0
+	for range producer.C {
+		jobID++
 		select {
-		case <-ctx.Done():
-			slog.Info("收到停止信号，准备退出服务循环")
-			return nil
-		case <-ticker.C:
-			slog.Info("服务正在运行...")
+		case jobs <- jobID:
+		default:
+			slog.Warn("任务队列已满，丢弃任务", "id", jobID)
 		}
 	}
+
+	// 模拟无响应退出的服务：不处理 ctx，不关闭 jobs，不等待 wg
+	// 该 return 不会触发，因为 producer.C 永不结束
+	return nil
 }
 
 // stopService 服务停止函数 - 标准签名：func() error

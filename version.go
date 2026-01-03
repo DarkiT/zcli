@@ -60,20 +60,29 @@ func NewVersion() *VersionInfo {
 
 // String 返回格式化的构建信息
 func (vi *VersionInfo) String() string {
+	version := vi.Version
+	if strings.Contains(vi.Version, "v") {
+		version = strings.TrimLeft(vi.Version, "v")
+	}
 	fields := []struct {
 		name  string
 		value interface{}
 		cond  bool
 	}{
-		{"Version", fmt.Sprintf("v%s", strings.TrimLeft(vi.Version, "v")), true},
-		{"Go Version", vi.GoVersion, true},
-		{"Compiler", vi.Compiler, true},
-		{"Platform", fmt.Sprintf("%s/%s", vi.Platform, vi.Architecture), true},
-		{"Git Branch", vi.GitBranch, vi.GitBranch != ""},
-		{"Git Tag", vi.GitTag, vi.GitTag != ""},
-		{"Git Commit", vi.GitCommit, vi.GitCommit != ""},
+		// 核心标识（用户最关心）
+		{"Version", fmt.Sprintf("%s", version), true},
+		{"Build Time", vi.BuildTime.Format(time.RFC3339), !vi.BuildTime.IsZero()},
 		{"Build Mode", map[bool]string{true: "Debug", false: "Release"}[vi.Debug.Load()], true},
-		{"Build Time", vi.BuildTime.Format(time.DateTime), !vi.BuildTime.IsZero()},
+
+		// Git 信息（追溯性）
+		{"Git Tag", vi.GitTag, vi.GitTag != ""},
+		{"Git Branch", vi.GitBranch, vi.GitBranch != ""},
+		{"Git Commit", vi.GitCommit, vi.GitCommit != ""},
+
+		// 运行环境（技术细节）
+		{"Go Version", vi.GoVersion, true},
+		{"Platform", fmt.Sprintf("%s/%s", vi.Platform, vi.Architecture), true},
+		{"Compiler", vi.Compiler, true},
 	}
 
 	var b strings.Builder

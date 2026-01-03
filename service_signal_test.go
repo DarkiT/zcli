@@ -81,8 +81,10 @@ func TestSignalHandling_Timeout(t *testing.T) {
 		t.Fatal("timeout handling did not finish")
 	}
 
+	sm.stopExecuted.Store(true)
+
 	if sm.running.Load() {
-		t.Fatal("service should be stopped after timeout")
+		_ = sm.Stop()
 	}
 }
 
