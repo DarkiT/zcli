@@ -34,8 +34,10 @@ func (c *Cli) initService() {
 		return
 	}
 
-	// 设置信号处理
-	go c.setupSignalHandler(sm)
+	// 设置信号处理（仅当未设置 RunWait 时）
+	if !sm.hasRunWaitOption() {
+		go c.setupSignalHandler(sm)
+	}
 
 	// 添加服务命令并配置根命令运行函数
 	c.addServiceCommands(sm)
@@ -45,12 +47,13 @@ func (c *Cli) initService() {
 func (c *Cli) setupSignalHandler(sm *sManager) {
 	<-c.config.ctx.Done()
 
-	// 15 秒强制退出兜底
 	if sm == nil {
 		return
 	}
-	timeoutMsg := sm.localizer.FormatError("timeout", 15)
-	sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
+	if sm.stopExecuted.Load() {
+		return
+	}
+	_ = sm.Stop()
 }
 
 // executeStopFunctions 执行所有已注册的停止函数
@@ -120,24 +123,34 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 		return nil, fmt.Errorf(localizer.FormatError("createConfig")+": %v", err)
 	}
 
-	// 设置 RunWait 选项，由我们接管信号处理
+	// 设置 RunWait 选项，仅当用户未设置时注入默认实现
 	if config.Option == nil {
 		config.Option = make(service.KeyValue)
 	}
-	signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
-	if runtime.GOOS != "windows" {
-		signals = append(signals, syscall.SIGQUIT)
-	}
-	config.Option["RunWait"] = func() {
-		sigCtx, stop := signal.NotifyContext(context.Background(), signals...)
-		defer stop()
-		ctx := sm.getCtx()
-		select {
-		case <-sigCtx.Done():
-			// 捕获外部信号后主动触发停止逻辑，确保 sm.ctx 被取消
-			_ = sm.Stop()
-		case <-ctx.Done():
+	if _, ok := config.Option["RunWait"]; !ok {
+		signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+		if runtime.GOOS != "windows" {
+			signals = append(signals, syscall.SIGQUIT)
 		}
+		config.Option["RunWait"] = func() {
+			sigCtx, stop := signal.NotifyContext(context.Background(), signals...)
+			defer stop()
+			ctx := sm.getCtx()
+			select {
+			case <-sigCtx.Done():
+				// 捕获外部信号后主动触发停止逻辑，确保 sm.ctx 被取消
+				_ = sm.Stop()
+			case <-ctx.Done():
+			}
+		}
+	}
+
+	// 写入 daemon Timeout 配置（优先使用用户显式设置）
+	if sm.commands.config.runtime.StartTimeout > 0 {
+		config.Timeout.Start = sm.commands.config.runtime.StartTimeout
+	}
+	if sm.commands.config.runtime.StopTimeout > 0 {
+		config.Timeout.Stop = sm.commands.config.runtime.StopTimeout
 	}
 
 	sm.config = config
@@ -194,18 +207,12 @@ func (sm *sManager) Run(ctx context.Context) error {
 	sm.mu.Unlock()
 	defer runCancel()
 
-	// 兜底：若 runCtx 被取消但业务未退出，15s 后强制结束
-	go func(runCtx context.Context) {
-		<-runCtx.Done()
-		timeoutMsg := sm.localizer.FormatError("timeout", 15)
-		sm.ExitWithTimeout(15*time.Second, timeoutMsg, 1)
-	}(runCtx)
-
 	defer sm.running.Store(false)
 
 	if sm.commands.config.runtime.Run != nil {
 		if err := sm.commands.config.runtime.Run(runCtx); err != nil {
-			_, _ = sm.localizer.colors.Error.Printf("服务运行错误: %v\n", err)
+			sm.cancel()
+			return err
 		}
 	}
 
@@ -217,7 +224,7 @@ func (sm *sManager) Run(ctx context.Context) error {
 
 	// 交互模式下补偿停止
 	if service.Interactive() && !sm.stopExecuted.Load() {
-		_ = sm.Stop()
+		return sm.Stop()
 	}
 	return nil
 }
@@ -228,13 +235,16 @@ func (sm *sManager) Stop() error {
 		return nil
 	}
 
+	var stopErr error
 	// 执行用户停止函数一次；若未提供停止函数则给出提示
-	if sm.commands.config.runtime.Stop != nil && !sm.stopFuncOnce.Swap(true) {
-		if err := sm.commands.config.runtime.Stop(); err != nil {
-			_, _ = sm.localizer.colors.Error.Printf("停止函数执行错误: %v\n", err)
+	if !sm.stopFuncOnce.Swap(true) {
+		if sm.commands.config.runtime.Stop != nil {
+			if err := sm.commands.config.runtime.Stop(); err != nil {
+				stopErr = err
+			}
+		} else {
+			sm.localizer.LogWarning("%s", "Stop function not configured, skipping cleanup logic")
 		}
-	} else if sm.commands.config.runtime.Stop == nil && !sm.stopFuncOnce.Swap(true) {
-		sm.localizer.LogWarning("%s", "未配置停止函数，跳过清理逻辑")
 	}
 
 	// 取消上下文
@@ -250,12 +260,23 @@ func (sm *sManager) Stop() error {
 	sm.mu.Unlock()
 
 	sm.running.Store(false)
-	return nil
+	return stopErr
 }
 
 // Name 返回服务名称
 func (sm *sManager) Name() string {
 	return sm.commands.config.basic.Name
+}
+
+func (sm *sManager) hasRunWaitOption() bool {
+	if sm == nil {
+		return false
+	}
+	if sm.config == nil || sm.config.Option == nil {
+		return false
+	}
+	_, ok := sm.config.Option["RunWait"]
+	return ok
 }
 
 // createServiceConfig 创建服务配置
@@ -427,14 +448,10 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 			return
 
 		case <-time.After(initialWait):
-			// 超时3秒，尝试调用停止函数
+			// 超时后优先调用 Stop，并在宽限期内等待退出
+			sm.localizer.LogWarning("%s", sm.localizer.GetError("timeoutWarning"))
 			if !sm.stopExecuted.Load() {
-				sm.localizer.LogWarning("%s", sm.localizer.GetError("timeoutWarning"))
-				// 如果尚未执行过，则调用 Stop 方法
 				_ = sm.Stop()
-			} else {
-				// 如果已经执行过 Stop，则直接调用停止函数
-				sm.callStopFunctions()
 			}
 
 			// 再等待用户停止逻辑和额外宽限时间
@@ -454,11 +471,15 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 
 // callStopFunctions 调用停止函数
 func (sm *sManager) callStopFunctions() {
-	if sm.commands.config.runtime.Stop != nil {
-		if err := sm.commands.config.runtime.Stop(); err != nil {
-			// 记录停止错误
-			_, _ = sm.localizer.colors.Error.Printf("停止函数执行错误: %v\n", err)
-		}
+	if sm.stopFuncOnce.Swap(true) {
+		return
+	}
+	if sm.commands.config.runtime.Stop == nil {
+		sm.localizer.LogWarning("%s", "Stop function not configured, skipping cleanup logic")
+		return
+	}
+	if err := sm.commands.config.runtime.Stop(); err != nil {
+		_, _ = sm.localizer.colors.Error.Printf("Stop function failed: %v\n", err)
 	}
 }
 

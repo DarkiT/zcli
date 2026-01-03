@@ -75,9 +75,6 @@ func TestSignalHandling_Timeout(t *testing.T) {
 	// 触发 ctx.Done()
 	cancel()
 
-	// 避免 waitForServiceCompletion 在持锁状态下再进入 Stop 导致死锁
-	sm.stopExecuted.Store(true)
-
 	select {
 	case <-waitDone:
 	case <-time.After(1 * time.Second):

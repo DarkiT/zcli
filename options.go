@@ -22,6 +22,8 @@ type Basic struct {
 	Logo        string // Logo 路径
 	Language    string // 使用语言
 	NoColor     bool   // 禁用彩色输出
+	SilenceErrors bool // 禁止打印错误
+	SilenceUsage  bool // 禁止打印使用说明
 }
 
 // Runtime 运行时配置
@@ -34,6 +36,10 @@ type Runtime struct {
 	ShutdownInitial time.Duration
 	// ShutdownGrace 在调用停止函数后的额外等待时长，默认 2s
 	ShutdownGrace time.Duration
+	// StartTimeout 启动超时，写入 daemon Config.Timeout.Start
+	StartTimeout time.Duration
+	// StopTimeout 停止超时，写入 daemon Config.Timeout.Stop
+	StopTimeout time.Duration
 }
 
 // Config 统一配置结构
@@ -71,6 +77,26 @@ func (c *Config) Context() context.Context {
 	return c.ctx
 }
 
+// WithSilenceErrors 设置是否静默错误输出
+func WithSilenceErrors(enabled bool) Option {
+	return func(c *Config) {
+		if c.basic == nil {
+			c.basic = &Basic{}
+		}
+		c.basic.SilenceErrors = enabled
+	}
+}
+
+// WithSilenceUsage 设置是否静默用法输出
+func WithSilenceUsage(enabled bool) Option {
+	return func(c *Config) {
+		if c.basic == nil {
+			c.basic = &Basic{}
+		}
+		c.basic.SilenceUsage = enabled
+	}
+}
+
 // Option CLI 选项函数
 type Option func(*Config)
 
@@ -94,6 +120,8 @@ func NewConfig() *Config {
 		basic: &Basic{
 			Language: "zh",
 			NoColor:  false,
+			SilenceErrors: false,
+			SilenceUsage:  false,
 		},
 		service: &ServiceConfig{
 			EnvVars: make(map[string]string),
@@ -178,6 +206,8 @@ func cloneRuntime(src *Runtime) Runtime {
 		Stop:            src.Stop,
 		ShutdownInitial: src.ShutdownInitial,
 		ShutdownGrace:   src.ShutdownGrace,
+		StartTimeout:    src.StartTimeout,
+		StopTimeout:     src.StopTimeout,
 	}
 
 	if src.BuildInfo != nil {

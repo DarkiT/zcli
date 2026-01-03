@@ -50,8 +50,8 @@ func NewCli(opts ...Option) *Cli {
 		lang:   GetLanguageManager().GetPrimary(),
 		command: &cobra.Command{
 			Use:           cfg.basic.Name, // 设置命令名称
-			SilenceErrors: true,           // 禁止打印错误
-			SilenceUsage:  true,           // 禁止打印使用说明
+			SilenceErrors: cfg.basic.SilenceErrors,
+			SilenceUsage:  cfg.basic.SilenceUsage,
 		},
 	}
 

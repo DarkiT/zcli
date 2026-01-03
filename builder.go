@@ -188,6 +188,13 @@ func (b *Builder) WithShutdownTimeouts(initial, grace time.Duration) *Builder {
 	return b
 }
 
+// WithServiceTimeouts 配置服务启动/停止超时（写入 daemon Config.Timeout）
+func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder {
+	b.config.runtime.StartTimeout = start
+	b.config.runtime.StopTimeout = stop
+	return b
+}
+
 // WithValidator 添加配置验证器
 func (b *Builder) WithValidator(validator func(*Config) error) *Builder {
 	b.validators = append(b.validators, validator)
