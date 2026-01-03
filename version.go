@@ -3,6 +3,7 @@ package zcli
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,7 @@ type VersionInfo struct {
 
 // NewVersion 创建版本信息
 func NewVersion() *VersionInfo {
-	return &VersionInfo{
+	vi := &VersionInfo{
 		Version:      "1.0.0",
 		GoVersion:    runtime.Version(),
 		Platform:     runtime.GOOS,
@@ -32,6 +33,29 @@ func NewVersion() *VersionInfo {
 		Compiler:     runtime.Compiler,
 		BuildTime:    time.Time{},
 	}
+
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.GoVersion != "" {
+			vi.GoVersion = info.GoVersion
+		}
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			vi.Version = info.Main.Version
+		}
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				if s.Value != "" {
+					vi.GitCommit = s.Value
+				}
+			case "vcs.time":
+				if t, err := time.Parse(time.RFC3339, s.Value); err == nil {
+					vi.BuildTime = t
+				}
+			}
+		}
+	}
+
+	return vi
 }
 
 // String 返回格式化的构建信息

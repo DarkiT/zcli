@@ -266,7 +266,7 @@ func (b *Builder) validate() error {
 	// 执行自定义验证器
 	for i, validator := range b.validators {
 		if err := validator(b.config); err != nil {
-			errs = append(errs, fmt.Errorf("验证器%d失败: %w", i+1, err))
+			errs = append(errs, fmt.Errorf("validator %d failed: %w", i+1, err))
 		}
 	}
 
