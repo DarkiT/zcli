@@ -100,7 +100,7 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 	// helpCmd.SetUsageTemplate(fmt.Sprintf(c.lang.Command.HelpUsage, rootCmd.CommandPath()))
 
 	// 配置根命令的帮助选项
-	rootCmd.PersistentFlags().BoolP("help", "h", false, c.lang.UI.Help.Command)
+	rootCmd.PersistentFlags().BoolP("help", "h", false, c.lang.UI.Help.Description)
 
 	// 禁用自动生成的帮助命令
 	rootCmd.SetHelpCommand(helpCmd)

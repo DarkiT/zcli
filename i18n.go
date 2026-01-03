@@ -438,7 +438,7 @@ func newChineseLanguage() *Language {
 				Usage:             "用法",
 				Options:           "选项",
 				Examples:          "示例",
-				Flags:             "参数",
+				Flags:             "flags",
 				AvailableCommands: "可用命令",
 				SystemCommands:    "系统命令",
 				DefaultValue:      "(默认值: %s)",
@@ -451,7 +451,7 @@ func newChineseLanguage() *Language {
 			Version: VersionUI{
 				Command:     "Ver",
 				Description: "显示版本信息",
-				Label:       "版本",
+				Label:       "v",
 			},
 		},
 		Error: ErrorDomain{
@@ -536,7 +536,7 @@ func newEnglishLanguage() *Language {
 				Usage:             "Usage",
 				Options:           "Options",
 				Examples:          "Examples",
-				Flags:             "Flags",
+				Flags:             "flags",
 				AvailableCommands: "Available Commands",
 				SystemCommands:    "System Commands",
 				DefaultValue:      "(default: %s)",
@@ -549,7 +549,7 @@ func newEnglishLanguage() *Language {
 			Version: VersionUI{
 				Command:     "Ver",
 				Description: "Show version information",
-				Label:       "Version",
+				Label:       "v",
 			},
 		},
 		Error: ErrorDomain{

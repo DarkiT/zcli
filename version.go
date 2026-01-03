@@ -41,7 +41,7 @@ func (vi *VersionInfo) String() string {
 		value interface{}
 		cond  bool
 	}{
-		{"Version", vi.Version, true},
+		{"Version", fmt.Sprintf("v%s", strings.TrimLeft(vi.Version, "v")), true},
 		{"Go Version", vi.GoVersion, true},
 		{"Compiler", vi.Compiler, true},
 		{"Platform", fmt.Sprintf("%s/%s", vi.Platform, vi.Architecture), true},
