@@ -98,12 +98,15 @@ type sManager struct {
 	running      atomic.Bool
 	stopExecuted atomic.Bool
 	stopFuncOnce atomic.Bool
+	forceExitOnce atomic.Bool
+	forceExitTimer *time.Timer
 }
 
 // newServiceManager 创建服务管理器实例
 func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc) (*sManager, error) {
 	// 创建服务本地化器
 	localizer := NewServiceLocalizer(GetLanguageManager(), cmd.colors)
+	localizer.ConfigureOutput(cmd.command.OutOrStdout(), cmd.command.ErrOrStderr(), cmd.config.basic.SilenceErrors, cmd.config.basic.SilenceUsage)
 
 	sm := &sManager{
 		commands:  cmd,
@@ -115,6 +118,7 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 
 	// 初始化为未执行状态
 	sm.stopExecuted.Store(false)
+	sm.forceExitOnce.Store(false)
 
 	// 创建服务配置
 	config, err := sm.createServiceConfig()
@@ -208,6 +212,7 @@ func (sm *sManager) Run(ctx context.Context) error {
 	defer runCancel()
 
 	defer sm.running.Store(false)
+	defer sm.cancelForceExit()
 
 	if sm.commands.config.runtime.Run != nil {
 		if err := sm.commands.config.runtime.Run(runCtx); err != nil {
@@ -234,6 +239,7 @@ func (sm *sManager) Stop() error {
 	if sm.stopExecuted.Swap(true) {
 		return nil
 	}
+	sm.scheduleForceExit(sm.commands.config.runtime.StopTimeout)
 
 	var stopErr error
 	// 执行用户停止函数一次；若未提供停止函数则给出提示
@@ -461,8 +467,9 @@ func (sm *sManager) waitForServiceCompletion(runDone chan struct{}) {
 				return
 
 			case <-time.After(graceWait):
-				// 若用户 Stop 耗时超出宽限，仅记录警告，状态由运行 goroutine 最终更新
+				// 若用户 Stop 耗时超出宽限，仅记录警告，并按需触发强制退出
 				sm.localizer.LogWarning("%s", sm.localizer.GetError("forceTerminate"))
+				sm.scheduleForceExit(sm.commands.config.runtime.StopTimeout)
 				return
 			}
 		}
@@ -479,7 +486,7 @@ func (sm *sManager) callStopFunctions() {
 		return
 	}
 	if err := sm.commands.config.runtime.Stop(); err != nil {
-		_, _ = sm.localizer.colors.Error.Printf("Stop function failed: %v\n", err)
+		sm.localizer.LogError("stopFailed", err)
 	}
 }
 
@@ -669,6 +676,38 @@ func (sm *sManager) ExitWithTimeout(timeout time.Duration, debugMsg string, exit
 		}
 		os.Exit(exitCode)
 	}()
+}
+
+func (sm *sManager) scheduleForceExit(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	if sm.forceExitOnce.Swap(true) {
+		return
+	}
+	seconds := int(timeout.Seconds())
+	msg := sm.localizer.FormatError("timeout", seconds)
+
+	sm.mu.Lock()
+	if sm.forceExitTimer == nil {
+		sm.forceExitTimer = time.AfterFunc(timeout, func() {
+			if msg != "" {
+				_, _ = fmt.Fprintln(os.Stderr, msg)
+			}
+			os.Exit(1)
+		})
+	}
+	sm.mu.Unlock()
+}
+
+func (sm *sManager) cancelForceExit() {
+	sm.mu.Lock()
+	if sm.forceExitTimer != nil {
+		sm.forceExitTimer.Stop()
+		sm.forceExitTimer = nil
+	}
+	sm.forceExitOnce.Store(false)
+	sm.mu.Unlock()
 }
 
 // checkPermissions 检查文件或目录的权限

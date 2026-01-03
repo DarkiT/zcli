@@ -33,7 +33,7 @@ func NewBuilder(lang ...string) *Builder {
 
 // WithDefaultConfig 使用默认配置
 func (b *Builder) WithDefaultConfig() *Builder {
-	b.WithLanguage("zh").
+	b.WithLanguage("en").
 		WithVersion("1.0.0").
 		WithDebug(false)
 	return b
@@ -195,6 +195,7 @@ func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder {
 	return b
 }
 
+
 // WithValidator 添加配置验证器
 func (b *Builder) WithValidator(validator func(*Config) error) *Builder {
 	b.validators = append(b.validators, validator)
@@ -315,7 +316,7 @@ func QuickService(name, displayName string, run RunFunc) *Cli {
 
 // QuickServiceWithStop 快速创建带停止函数的服务应用
 func QuickServiceWithStop(name, displayName string, run RunFunc, stop StopFunc) *Cli {
-	return NewBuilder("zh").
+	return NewBuilder("en").
 		WithName(name).
 		WithDisplayName(displayName).
 		WithService(run, stop).
@@ -324,7 +325,7 @@ func QuickServiceWithStop(name, displayName string, run RunFunc, stop StopFunc) 
 
 // QuickCLI 快速创建基础CLI应用
 func QuickCLI(name, displayName, description string) *Cli {
-	return NewBuilder("zh").
+	return NewBuilder("en").
 		WithName(name).
 		WithDisplayName(displayName).
 		WithDescription(description).
@@ -338,7 +339,7 @@ func QuickCLI(name, displayName, description string) *Cli {
 // WithDefaults 设置默认配置
 func (b *Builder) WithDefaults() *Builder {
 	if b.config.basic.Language == "" {
-		b.config.basic.Language = "zh"
+		b.config.basic.Language = "en"
 	}
 	if b.config.basic.Version == "" {
 		b.config.basic.Version = "1.0.0"

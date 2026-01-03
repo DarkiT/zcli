@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,7 +42,9 @@ func NewCli(opts ...Option) *Cli {
 
 	// 设置语言
 	if cfg.basic.Language != "" {
-		_ = SetLanguage(cfg.basic.Language)
+		if err := SetLanguage(cfg.basic.Language); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "set language failed: %v\n", err)
+		}
 	}
 
 	cmd := &Cli{

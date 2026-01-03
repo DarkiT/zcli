@@ -15,15 +15,15 @@ type StopFunc func() error
 
 // Basic 基础配置
 type Basic struct {
-	Name        string // 服务名称
-	DisplayName string // 显示名称
-	Description string // 服务描述
-	Version     string // 版本
-	Logo        string // Logo 路径
-	Language    string // 使用语言
-	NoColor     bool   // 禁用彩色输出
-	SilenceErrors bool // 禁止打印错误
-	SilenceUsage  bool // 禁止打印使用说明
+	Name          string // 服务名称
+	DisplayName   string // 显示名称
+	Description   string // 服务描述
+	Version       string // 版本
+	Logo          string // Logo 路径
+	Language      string // 使用语言
+	NoColor       bool   // 禁用彩色输出
+	SilenceErrors bool   // 禁止打印错误
+	SilenceUsage  bool   // 禁止打印使用说明
 }
 
 // Runtime 运行时配置
@@ -118,8 +118,8 @@ func WithConfig(cfg *Config) Option {
 func NewConfig() *Config {
 	return &Config{
 		basic: &Basic{
-			Language: "zh",
-			NoColor:  false,
+			Language:      "en",
+			NoColor:       false,
 			SilenceErrors: false,
 			SilenceUsage:  false,
 		},
@@ -130,6 +130,7 @@ func NewConfig() *Config {
 		runtime: &Runtime{
 			ShutdownInitial: 3 * time.Second,
 			ShutdownGrace:   2 * time.Second,
+			StopTimeout:      20 * time.Second,
 		},
 		ctx: context.Background(),
 	}
