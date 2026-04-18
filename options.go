@@ -15,15 +15,16 @@ type StopFunc func() error
 
 // Basic 基础配置
 type Basic struct {
-	Name          string // 服务名称
-	DisplayName   string // 显示名称
-	Description   string // 服务描述
-	Version       string // 版本
-	Logo          string // Logo 路径
-	Language      string // 使用语言
-	NoColor       bool   // 禁用彩色输出
-	SilenceErrors bool   // 禁止打印错误
-	SilenceUsage  bool   // 禁止打印使用说明
+	Name              string // 服务名称
+	DisplayName       string // 显示名称
+	Description       string // 服务描述
+	Version           string // 版本
+	Logo              string // Logo 路径
+	Language          string // 使用语言
+	MousetrapDisabled bool   // 禁用 Windows 双击运行提示
+	NoColor           bool   // 禁用彩色输出
+	SilenceErrors     bool   // 禁止打印错误
+	SilenceUsage      bool   // 禁止打印使用说明
 }
 
 // Runtime 运行时配置
@@ -32,14 +33,16 @@ type Runtime struct {
 	Stop      StopFunc     // 停止函数，标准签名：func() error
 	BuildInfo *VersionInfo // 构建信息
 
-	// ShutdownInitial 优雅退出的初次等待时长，默认 3s
+	// ShutdownInitial 在取消 Run(ctx) 后，等待主服务优雅退出的时长，默认 15s
 	ShutdownInitial time.Duration
-	// ShutdownGrace 在调用停止函数后的额外等待时长，默认 2s
+	// ShutdownGrace 在主服务收到停止信号后，保留给 stop hook / 最终清理的额外时长，默认 5s
 	ShutdownGrace time.Duration
 	// StartTimeout 启动超时，写入 daemon Config.Timeout.Start
 	StartTimeout time.Duration
 	// StopTimeout 停止超时，写入 daemon Config.Timeout.Stop
 	StopTimeout time.Duration
+	// ErrorHandlers 错误处理器链
+	ErrorHandlers []ErrorHandler
 }
 
 // Config 统一配置结构
@@ -75,6 +78,41 @@ func (c *Config) Context() context.Context {
 		return context.Background()
 	}
 	return c.ctx
+}
+
+// =====================
+// 只读视图（性能优化）
+// =====================
+
+// ConfigView 只读配置视图，避免频繁深拷贝
+// 注意：调用方不应修改返回的指针内容
+type ConfigView struct {
+	config *Config
+}
+
+// View 创建只读视图
+func (c *Config) View() *ConfigView {
+	return &ConfigView{config: c}
+}
+
+// Basic 返回基础配置的只读引用
+func (cv *ConfigView) Basic() *Basic {
+	return cv.config.basic
+}
+
+// Service 返回服务配置的只读引用
+func (cv *ConfigView) Service() *ServiceConfig {
+	return cv.config.service
+}
+
+// Runtime 返回运行时配置的只读引用
+func (cv *ConfigView) Runtime() *Runtime {
+	return cv.config.runtime
+}
+
+// Context 返回配置的上下文
+func (cv *ConfigView) Context() context.Context {
+	return cv.config.Context()
 }
 
 // WithSilenceErrors 设置是否静默错误输出
@@ -125,12 +163,12 @@ func NewConfig() *Config {
 		},
 		service: &ServiceConfig{
 			EnvVars: make(map[string]string),
-			Options: make(map[string]interface{}),
+			Options: make(ServiceOptions),
 		},
 		runtime: &Runtime{
-			ShutdownInitial: 3 * time.Second,
-			ShutdownGrace:   2 * time.Second,
-			StopTimeout:      20 * time.Second,
+			ShutdownInitial: 15 * time.Second,
+			ShutdownGrace:   5 * time.Second,
+			StopTimeout:     20 * time.Second,
 		},
 		ctx: context.Background(),
 	}
@@ -156,14 +194,15 @@ func cloneService(src *ServiceConfig) ServiceConfig {
 	}
 
 	dst := ServiceConfig{
-		Name:        src.Name,
-		DisplayName: src.DisplayName,
-		Description: src.Description,
-		Version:     src.Version,
-		WorkDir:     src.WorkDir,
-		Username:    src.Username,
-		Executable:  src.Executable,
-		ChRoot:      src.ChRoot,
+		Name:              src.Name,
+		DisplayName:       src.DisplayName,
+		Description:       src.Description,
+		Version:           src.Version,
+		WorkDir:           src.WorkDir,
+		Username:          src.Username,
+		Executable:        src.Executable,
+		ChRoot:            src.ChRoot,
+		AllowSudoFallback: src.AllowSudoFallback,
 	}
 
 	if len(src.Arguments) > 0 {
@@ -172,6 +211,9 @@ func cloneService(src *ServiceConfig) ServiceConfig {
 	if len(src.Dependencies) > 0 {
 		dst.Dependencies = append([]string(nil), src.Dependencies...)
 	}
+	if len(src.StructuredDeps) > 0 {
+		dst.StructuredDeps = append([]Dependency(nil), src.StructuredDeps...)
+	}
 	if src.EnvVars != nil {
 		dst.EnvVars = make(map[string]string, len(src.EnvVars))
 		for k, v := range src.EnvVars {
@@ -179,7 +221,7 @@ func cloneService(src *ServiceConfig) ServiceConfig {
 		}
 	}
 	if src.Options != nil {
-		dst.Options = make(map[string]interface{}, len(src.Options))
+		dst.Options = make(ServiceOptions, len(src.Options))
 		for k, v := range src.Options {
 			dst.Options[k] = v
 		}
@@ -209,6 +251,10 @@ func cloneRuntime(src *Runtime) Runtime {
 		ShutdownGrace:   src.ShutdownGrace,
 		StartTimeout:    src.StartTimeout,
 		StopTimeout:     src.StopTimeout,
+	}
+
+	if len(src.ErrorHandlers) > 0 {
+		dst.ErrorHandlers = append([]ErrorHandler(nil), src.ErrorHandlers...)
 	}
 
 	if src.BuildInfo != nil {

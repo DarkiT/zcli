@@ -21,10 +21,6 @@ vendor/
 .idea/
 .fleet/
 
-# Go 工作区文件
-go.work
-go.work.sum
-
 # 环境变量文件
 .env
 .env.local
@@ -33,7 +29,7 @@ go.work.sum
 .env.production.local
 .envrc
 .specstory
-
+service/
 # 临时文件
 *~
 *.tmp

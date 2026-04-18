@@ -1,0 +1,4 @@
+interface:
+  display_name: "Darkit ZCli"
+  short_description: "Guide for darkit/zcli codebase tasks"
+  default_prompt: "Use $darkit-zcli to navigate the current zcli repo docs, examples, and live code before making changes."

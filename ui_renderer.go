@@ -54,7 +54,11 @@ func (r *uiRenderer) renderLogo(buf *strings.Builder, cc *cobra.Command) {
 
 		// Version
 		if r.cli.command.Version != "" {
-			buf.WriteString(r.colors.Logo.Sprintf(" %s%s", r.lang.UI.Version.Label, strings.TrimLeft(r.cli.command.Version, "v")))
+			buf.WriteString(r.colors.Logo.Sprintf(
+				" %s%s",
+				r.lang.UI.Version.Label,
+				strings.TrimLeft(r.cli.command.Version, "v"),
+			))
 		}
 		buf.WriteString(separator)
 		buf.WriteString(separator)

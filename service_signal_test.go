@@ -26,7 +26,7 @@ func TestSignalHandling_SIGTERM(t *testing.T) {
 	testSignalHandling(t, syscall.SIGTERM)
 }
 
-// TestSignalHandling_Timeout 验证三层超时 3s+2s+15s 逻辑（缩短版）
+// TestSignalHandling_Timeout 验证分级关闭预算逻辑（缩短版）
 func TestSignalHandling_Timeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 路径单独覆盖")
@@ -57,7 +57,7 @@ func TestSignalHandling_Timeout(t *testing.T) {
 
 	go func() {
 		defer close(runDone)
-		_ = sm.Run(sm.ctx)
+		_ = sm.Run(sm.getCtx())
 	}()
 
 	select {
@@ -68,7 +68,7 @@ func TestSignalHandling_Timeout(t *testing.T) {
 
 	waitDone := make(chan struct{})
 	go func() {
-		sm.waitForServiceCompletion(runDone)
+		sm.waitForServiceCompletion(sm.getCtx(), runDone)
 		close(waitDone)
 	}()
 
@@ -85,6 +85,97 @@ func TestSignalHandling_Timeout(t *testing.T) {
 
 	if sm.running.Load() {
 		_ = sm.Stop()
+	}
+}
+
+// TestContextMerge_ExternalCancel 验证外部上下文取消可触发运行退出
+func TestContextMerge_ExternalCancel(t *testing.T) {
+	config := NewConfig()
+	config.basic.Name = "ctx-merge-external"
+
+	userCtx, userCancel := context.WithCancel(context.Background())
+	config.ctx = userCtx
+
+	runDone := make(chan struct{})
+	config.runtime.Run = func(ctx context.Context) error {
+		close(runDone)
+		<-ctx.Done()
+		return nil
+	}
+
+	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	defer userCancel()
+
+	sm, err := newServiceManager(cli, baseCtx, baseCancel)
+	if err != nil {
+		t.Fatalf("newServiceManager: %v", err)
+	}
+
+	exitDone := make(chan struct{})
+	go func() {
+		_ = sm.Run(baseCtx)
+		close(exitDone)
+	}()
+
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("service not started")
+	}
+
+	userCancel()
+
+	select {
+	case <-exitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not exit on external context cancel")
+	}
+}
+
+// TestContextMerge_DaemonCancel 验证 daemon 传入上下文取消可触发运行退出
+func TestContextMerge_DaemonCancel(t *testing.T) {
+	config := NewConfig()
+	config.basic.Name = "ctx-merge-daemon"
+
+	userCtx, userCancel := context.WithCancel(context.Background())
+	config.ctx = userCtx
+
+	runDone := make(chan struct{})
+	config.runtime.Run = func(ctx context.Context) error {
+		close(runDone)
+		<-ctx.Done()
+		return nil
+	}
+
+	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer userCancel()
+
+	sm, err := newServiceManager(cli, baseCtx, baseCancel)
+	if err != nil {
+		t.Fatalf("newServiceManager: %v", err)
+	}
+
+	exitDone := make(chan struct{})
+	go func() {
+		_ = sm.Run(baseCtx)
+		close(exitDone)
+	}()
+
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("service not started")
+	}
+
+	baseCancel()
+
+	select {
+	case <-exitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not exit on daemon context cancel")
 	}
 }
 

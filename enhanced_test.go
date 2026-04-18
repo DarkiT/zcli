@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // TestEnhancedBuilderAPI 测试增强的Builder API
@@ -88,6 +90,156 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("新版服务配置Builder语义", func(t *testing.T) {
+		cli, err := NewBuilder("zh").
+			WithName("dep-app").
+			WithDependencies("postgresql", "redis").
+			WithDependency("network.target", DependencyAfter).
+			WithServiceOption("Restart", "on-failure").
+			WithAllowSudoFallback(true).
+			BuildWithError()
+		if err != nil {
+			t.Fatalf("期望构建成功，但得到错误: %v", err)
+		}
+
+		if len(cli.config.service.StructuredDeps) != 3 {
+			t.Fatalf("期望生成3个结构化依赖，实际为 %d", len(cli.config.service.StructuredDeps))
+		}
+		if cli.config.service.StructuredDeps[0].Type != DependencyRequire {
+			t.Fatalf("WithDependencies 应默认生成 require 依赖，实际为 %q", cli.config.service.StructuredDeps[0].Type)
+		}
+		if cli.config.service.Options["Restart"] != "on-failure" {
+			t.Fatalf("期望服务选项被写入，实际为 %#v", cli.config.service.Options)
+		}
+		if !cli.config.service.AllowSudoFallback {
+			t.Fatal("期望 AllowSudoFallback 被写入")
+		}
+
+		cli, err = NewBuilder("zh").
+			WithName("legacy-dep-app").
+			WithLegacyDependencies("After=network-online.target").
+			BuildWithError()
+		if err != nil {
+			t.Fatalf("期望构建成功，但得到错误: %v", err)
+		}
+		if len(cli.config.service.Dependencies) != 1 {
+			t.Fatalf("期望保留原生字符串依赖，实际为 %#v", cli.config.service.Dependencies)
+		}
+		if len(cli.config.service.StructuredDeps) != 0 {
+			t.Fatalf("WithLegacyDependencies 不应保留结构化依赖，实际为 %#v", cli.config.service.StructuredDeps)
+		}
+	})
+
+	t.Run("BuildWithError保留InitHook与延迟命令构建", func(t *testing.T) {
+		var hookCalled atomic.Bool
+
+		cli, err, panicked := func() (cli *Cli, err error, panicked bool) {
+			defer func() {
+				if recover() != nil {
+					panicked = true
+				}
+			}()
+
+			cli, err = NewBuilder("zh").
+				WithCommand(&Command{
+					Use: "ping",
+					Run: func(cmd *Command, args []string) {},
+				}).
+				WithName("hook-app").
+				WithInitHook(func(cmd *cobra.Command, args []string) error {
+					hookCalled.Store(true)
+					return nil
+				}).
+				BuildWithError()
+			return
+		}()
+
+		if panicked {
+			t.Fatal("WithCommand 不应提前触发 Build() panic")
+		}
+		if err != nil {
+			t.Fatalf("期望构建成功，但得到错误: %v", err)
+		}
+
+		cli.SetArgs([]string{"ping"})
+		if err := cli.Execute(); err != nil {
+			t.Fatalf("执行命令失败: %v", err)
+		}
+		if !hookCalled.Load() {
+			t.Fatal("BuildWithError 应附加 init hook")
+		}
+
+		found := false
+		for _, cmd := range cli.Commands() {
+			if cmd.Name() == "ping" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("WithCommand 添加的命令应在构建后可见")
+		}
+	})
+
+	t.Run("WithServiceRunner nil 不应立即 panic", func(t *testing.T) {
+		panicked := false
+		var err error
+
+		func() {
+			defer func() {
+				if recover() != nil {
+					panicked = true
+				}
+			}()
+
+			_, err = NewBuilder("zh").
+				WithName("nil-runner").
+				WithServiceRunner(nil).
+				BuildWithError()
+		}()
+
+		if panicked {
+			t.Fatal("WithServiceRunner(nil) 不应立即 panic")
+		}
+		if err == nil {
+			t.Fatal("期望 BuildWithError 返回错误")
+		}
+	})
+
+	t.Run("WithMousetrapDisabled 不应污染全局", func(t *testing.T) {
+		prevPackage := MousetrapHelpText
+		prevCobra := cobra.MousetrapHelpText
+		defer func() {
+			MousetrapHelpText = prevPackage
+			cobra.MousetrapHelpText = prevCobra
+		}()
+
+		MousetrapHelpText = "GLOBAL"
+		cobra.MousetrapHelpText = "GLOBAL"
+
+		cli, err := NewBuilder("zh").
+			WithName("mouse-app").
+			WithMousetrapDisabled(true).
+			WithCommand(&Command{Use: "ping", Run: func(cmd *Command, args []string) {}}).
+			BuildWithError()
+		if err != nil {
+			t.Fatalf("构建失败: %v", err)
+		}
+
+		if MousetrapHelpText != "GLOBAL" {
+			t.Fatalf("builder 不应修改包级 MousetrapHelpText，got %q", MousetrapHelpText)
+		}
+
+		cli.SetArgs([]string{"ping"})
+		if err := cli.Execute(); err != nil {
+			t.Fatalf("执行失败: %v", err)
+		}
+
+		if cobra.MousetrapHelpText != "GLOBAL" {
+			t.Fatalf("执行后应恢复 cobra.MousetrapHelpText，got %q", cobra.MousetrapHelpText)
+		}
+	})
+
 	t.Run("便利性API", func(t *testing.T) {
 		// 测试QuickService
 		cli := QuickService("quick-test", "快速测试服务", func(ctx context.Context) error {
@@ -105,6 +257,22 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 			t.Errorf("期望工具名称为 'cli-tool'，实际为 '%s'", cliTool.Name())
 		}
 	})
+}
+
+type noopErrorHandler struct{}
+
+func (noopErrorHandler) HandleError(err error) error { return err }
+
+func TestWithConfigPreservesErrorHandlers(t *testing.T) {
+	src := NewConfig()
+	src.runtime.ErrorHandlers = []ErrorHandler{noopErrorHandler{}}
+
+	dst := NewConfig()
+	WithConfig(src)(dst)
+
+	if len(dst.runtime.ErrorHandlers) != 1 {
+		t.Fatalf("expected 1 error handler after clone, got %d", len(dst.runtime.ErrorHandlers))
+	}
 }
 
 // TestServiceInterface 测试服务接口

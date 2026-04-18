@@ -12,18 +12,18 @@ import (
 
 type stubSystemInteractive struct{}
 
-func (stubSystemInteractive) String() string                 { return "stub-interactive" }
-func (stubSystemInteractive) Detect() bool                   { return true }
-func (stubSystemInteractive) Interactive() bool              { return true }
+func (stubSystemInteractive) String() string    { return "stub-interactive" }
+func (stubSystemInteractive) Detect() bool      { return true }
+func (stubSystemInteractive) Interactive() bool { return true }
 func (stubSystemInteractive) New(service.Interface, *service.Config) (service.Service, error) {
 	return nil, nil
 }
 
 type stubSystemDaemon struct{}
 
-func (stubSystemDaemon) String() string                 { return "stub-daemon" }
-func (stubSystemDaemon) Detect() bool                   { return true }
-func (stubSystemDaemon) Interactive() bool              { return false }
+func (stubSystemDaemon) String() string    { return "stub-daemon" }
+func (stubSystemDaemon) Detect() bool      { return true }
+func (stubSystemDaemon) Interactive() bool { return false }
 func (stubSystemDaemon) New(service.Interface, *service.Config) (service.Service, error) {
 	return nil, nil
 }

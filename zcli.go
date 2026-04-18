@@ -58,7 +58,12 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 			cmd, _, err := rootCmd.Find(args)
 			if cmd == nil || err != nil {
 				// 命令未找到
-				_, _ = fmt.Fprintf(cc.OutOrStderr(), "%s%s\n\n", c.colors.Error.Sprint(c.lang.Error.Prefix), fmt.Sprintf(c.lang.Error.Help.UnknownTopic, args))
+				_, _ = fmt.Fprintf(
+					cc.OutOrStderr(),
+					"%s%s\n\n",
+					c.colors.Error.Sprint(c.lang.Error.Prefix),
+					fmt.Sprintf(c.lang.Error.Help.UnknownTopic, args),
+				)
 				return rootCmd.Usage()
 			}
 

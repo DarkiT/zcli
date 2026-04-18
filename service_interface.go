@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	service "github.com/darkit/daemon"
 )
 
 // =============================================================================
@@ -24,20 +26,38 @@ type ServiceRunner interface {
 	Name() string
 }
 
+// DependencyType 对齐 daemon 的结构化依赖类型。
+type DependencyType = service.DependencyType
+
+const (
+	DependencyAfter   = service.DependencyAfter
+	DependencyBefore  = service.DependencyBefore
+	DependencyRequire = service.DependencyRequire
+	DependencyWant    = service.DependencyWant
+)
+
+// Dependency 对齐 daemon 的结构化依赖定义。
+type Dependency = service.Dependency
+
+// ServiceOptions 对齐 daemon 的平台特定配置容器。
+type ServiceOptions = service.KeyValue
+
 // ServiceConfig 服务配置结构，提供完整的类型安全
 type ServiceConfig struct {
-	Name         string            `validate:"required,min=3,max=50"`
-	DisplayName  string            `validate:"required,max=100"`
-	Description  string            `validate:"max=500"`
-	Version      string            `validate:"semver"`
-	WorkDir      string            `validate:"dir_path"`
-	Username     string            `validate:"username"`
-	Dependencies []string          `validate:"dive,required"`
-	EnvVars      map[string]string `validate:"dive,keys,required,endkeys,required"`
-	Arguments    []string
-	Executable   string
-	ChRoot       string
-	Options      map[string]interface{}
+	Name              string            `validate:"required"`
+	DisplayName       string            `validate:"max=100"`
+	Description       string            `validate:"max=500"`
+	Version           string            `validate:"semver"`
+	WorkDir           string            `validate:"dir_path"`
+	Username          string            `validate:"username"`
+	Dependencies      []string          `validate:"dive,required"`
+	StructuredDeps    []Dependency      `validate:"dive"`
+	EnvVars           map[string]string `validate:"dive,keys,required,endkeys,required"`
+	Arguments         []string
+	Executable        string
+	ChRoot            string
+	Options           ServiceOptions
+	AllowSudoFallback bool
 }
 
 // Validate 验证配置的有效性
@@ -47,13 +67,6 @@ func (sc *ServiceConfig) Validate() error {
 	// 验证必需字段
 	if sc.Name == "" {
 		errs = append(errs, errors.New("service name is required"))
-	}
-	if len(sc.Name) < 3 || len(sc.Name) > 50 {
-		errs = append(errs, errors.New("service name length must be between 3 and 50 characters"))
-	}
-
-	if sc.DisplayName == "" {
-		errs = append(errs, errors.New("display name is required"))
 	}
 	if len(sc.DisplayName) > 100 {
 		errs = append(errs, errors.New("display name must not exceed 100 characters"))
@@ -70,14 +83,22 @@ func (sc *ServiceConfig) Validate() error {
 			errs = append(errs, fmt.Errorf("dependency[%d] must not be empty", i))
 		}
 	}
+	for i, dep := range sc.StructuredDeps {
+		if dep.Name == "" {
+			errs = append(errs, fmt.Errorf("structured dependency[%d] name must not be empty", i))
+			continue
+		}
+		switch dep.Type {
+		case "", DependencyAfter, DependencyBefore, DependencyRequire, DependencyWant:
+		default:
+			errs = append(errs, fmt.Errorf("structured dependency[%d] has invalid type %q", i, dep.Type))
+		}
+	}
 
 	// 验证环境变量
-	for key, value := range sc.EnvVars {
+	for key := range sc.EnvVars {
 		if key == "" {
 			errs = append(errs, errors.New("environment variable key is required"))
-		}
-		if value == "" {
-			errs = append(errs, fmt.Errorf("environment variable[%s] value is required", key))
 		}
 	}
 
@@ -113,11 +134,15 @@ type BaseService struct {
 	mu       sync.Mutex
 	running  bool
 	stopChan chan struct{}
+	stopOnce *sync.Once
 	onStop   []func() error
 }
 
 // NewBaseService 创建基础服务实例
 func NewBaseService(config ServiceConfig) (*BaseService, error) {
+	if config.DisplayName == "" {
+		config.DisplayName = config.Name
+	}
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
 	}
@@ -125,6 +150,7 @@ func NewBaseService(config ServiceConfig) (*BaseService, error) {
 	return &BaseService{
 		config:   config,
 		stopChan: make(chan struct{}),
+		stopOnce: new(sync.Once),
 	}, nil
 }
 
@@ -135,13 +161,9 @@ func (bs *BaseService) Name() string {
 
 // Run 运行服务的默认实现，子类应该重写此方法
 func (bs *BaseService) Run(ctx context.Context) error {
-	bs.mu.Lock()
-	if bs.running {
-		bs.mu.Unlock()
-		return errors.New("service already running")
+	if err := bs.prepareRun(); err != nil {
+		return err
 	}
-	bs.running = true
-	bs.mu.Unlock()
 
 	defer bs.setRunning(false)
 
@@ -162,25 +184,27 @@ func (bs *BaseService) Stop() error {
 		return nil
 	}
 	bs.running = false
+	stopChan := bs.stopChan
+	stopOnce := bs.stopOnce
+	stopHandlers := append([]func() error(nil), bs.onStop...)
 	bs.mu.Unlock()
 
 	// 执行停止回调
 	var errs []error
-	for _, stopFunc := range bs.onStop {
+	for _, stopFunc := range stopHandlers {
 		if err := stopFunc(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
-	// 关闭停止通道
-	bs.mu.Lock()
-	select {
-	case <-bs.stopChan:
-		// 已经关闭
-	default:
-		close(bs.stopChan)
+	// 使用 sync.Once 确保只关闭一次
+	if stopOnce != nil {
+		stopOnce.Do(func() {
+			if stopChan != nil {
+				close(stopChan)
+			}
+		})
 	}
-	bs.mu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors occurred while stopping service: %v", errs)
@@ -188,8 +212,25 @@ func (bs *BaseService) Stop() error {
 	return nil
 }
 
+func (bs *BaseService) prepareRun() error {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	if bs.running {
+		return errors.New("service already running")
+	}
+
+	bs.running = true
+	bs.stopChan = make(chan struct{})
+	bs.stopOnce = new(sync.Once)
+	return nil
+}
+
 // AddStopHandler 添加停止处理函数
 func (bs *BaseService) AddStopHandler(handler func() error) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
 	bs.onStop = append(bs.onStop, handler)
 }
 
@@ -202,6 +243,8 @@ func (bs *BaseService) IsRunning() bool {
 
 // WaitForStop 等待停止信号
 func (bs *BaseService) WaitForStop() <-chan struct{} {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
 	return bs.stopChan
 }
 
@@ -224,7 +267,11 @@ type FuncService struct {
 }
 
 // NewFuncService 创建函数式服务
-func NewFuncService(config ServiceConfig, runFunc func(context.Context) error, stopFunc func() error) (*FuncService, error) {
+func NewFuncService(
+	config ServiceConfig,
+	runFunc func(context.Context) error,
+	stopFunc func() error,
+) (*FuncService, error) {
 	base, err := NewBaseService(config)
 	if err != nil {
 		return nil, err
@@ -250,13 +297,9 @@ func NewFuncService(config ServiceConfig, runFunc func(context.Context) error, s
 
 // Run 运行服务
 func (fs *FuncService) Run(ctx context.Context) error {
-	fs.mu.Lock()
-	if fs.running {
-		fs.mu.Unlock()
-		return errors.New("service already running")
+	if err := fs.prepareRun(); err != nil {
+		return err
 	}
-	fs.running = true
-	fs.mu.Unlock()
 
 	defer fs.setRunning(false)
 
@@ -316,20 +359,30 @@ func (ms *ManagedService) Run(ctx context.Context) error {
 	// 启动前处理
 	if ms.lifecycle != nil {
 		if err := ms.lifecycle.BeforeStart(); err != nil {
-			return fmt.Errorf("启动前处理失败: %w", err)
+			return fmt.Errorf("before start hook failed: %w", err)
 		}
 	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	// 启动服务
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ms.ServiceRunner.Run(ctx)
+		errChan <- ms.ServiceRunner.Run(runCtx)
 	}()
 
 	// 启动后处理
 	if ms.lifecycle != nil {
 		if err := ms.lifecycle.AfterStart(); err != nil {
-			return fmt.Errorf("启动后处理失败: %w", err)
+			cancel()
+			stopErr := ms.Stop()
+			runErr := <-errChan
+			return CombineErrors(
+				fmt.Errorf("after start hook failed: %w", err),
+				stopErr,
+				runErr,
+			)
 		}
 	}
 
@@ -338,28 +391,33 @@ func (ms *ManagedService) Run(ctx context.Context) error {
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
+		var errs []error
+
 		// 停止前处理
 		if ms.lifecycle != nil {
 			if err := ms.lifecycle.BeforeStop(); err != nil {
-				// 记录错误但继续停止
-				fmt.Printf("停止前处理失败: %v\n", err)
+				errs = append(errs, fmt.Errorf("BeforeStop: %w", err))
 			}
 		}
 
 		// 停止服务
 		if err := ms.Stop(); err != nil {
-			return fmt.Errorf("停止服务失败: %w", err)
+			errs = append(errs, fmt.Errorf("stop failed: %w", err))
 		}
 
 		// 停止后处理
 		if ms.lifecycle != nil {
 			if err := ms.lifecycle.AfterStop(); err != nil {
-				// 记录错误但继续
-				fmt.Printf("停止后处理失败: %v\n", err)
+				errs = append(errs, fmt.Errorf("AfterStop: %w", err))
 			}
 		}
 
-		return ctx.Err()
+		if runErr := <-errChan; runErr != nil && !errors.Is(runErr, context.Canceled) {
+			errs = append(errs, runErr)
+		}
+
+		errs = append(errs, ctx.Err())
+		return CombineErrors(errs...)
 	}
 }
 
@@ -465,7 +523,7 @@ func NewSimpleService(name string, runFunc func(context.Context) error, stopFunc
 	service, err := NewFuncService(config, runFunc, stopFunc)
 	if err != nil {
 		// 对于简单服务，我们使用panic而不是返回错误
-		panic(fmt.Sprintf("创建简单服务失败: %v", err))
+		panic(fmt.Sprintf("Failed to create simple service: %v", err))
 	}
 
 	return service

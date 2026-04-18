@@ -23,14 +23,17 @@ const (
 	ErrConfigInvalid    ErrorCode = "CONFIG_INVALID"
 
 	// 服务相关错误
-	ErrServiceCreate   ErrorCode = "SERVICE_CREATE"
-	ErrServiceStart    ErrorCode = "SERVICE_START"
-	ErrServiceStop     ErrorCode = "SERVICE_STOP"
-	ErrServiceRestart  ErrorCode = "SERVICE_RESTART"
-	ErrServiceNotFound ErrorCode = "SERVICE_NOT_FOUND"
-	ErrServiceRunning  ErrorCode = "SERVICE_ALREADY_RUNNING"
-	ErrServiceStopped  ErrorCode = "SERVICE_ALREADY_STOPPED"
-	ErrServiceTimeout  ErrorCode = "SERVICE_TIMEOUT"
+	ErrServiceCreate    ErrorCode = "SERVICE_CREATE"
+	ErrServiceInstall   ErrorCode = "SERVICE_INSTALL"
+	ErrServiceUninstall ErrorCode = "SERVICE_UNINSTALL"
+	ErrServiceStart     ErrorCode = "SERVICE_START"
+	ErrServiceStop      ErrorCode = "SERVICE_STOP"
+	ErrServiceRestart   ErrorCode = "SERVICE_RESTART"
+	ErrServiceStatus    ErrorCode = "SERVICE_STATUS"
+	ErrServiceNotFound  ErrorCode = "SERVICE_NOT_FOUND"
+	ErrServiceRunning   ErrorCode = "SERVICE_ALREADY_RUNNING"
+	ErrServiceStopped   ErrorCode = "SERVICE_ALREADY_STOPPED"
+	ErrServiceTimeout   ErrorCode = "SERVICE_TIMEOUT"
 
 	// 系统相关错误
 	ErrPermission        ErrorCode = "PERMISSION_DENIED"
@@ -451,7 +454,7 @@ func (ea *ErrorAggregator) Error() string {
 		messages = append(messages, fmt.Sprintf("%d. %s", i+1, err.Error()))
 	}
 
-	return fmt.Sprintf("发生%d个错误:\n%s", len(ea.errors), strings.Join(messages, "\n"))
+	return fmt.Sprintf("%d error(s) occurred:\n%s", len(ea.errors), strings.Join(messages, "\n"))
 }
 
 // Clear 清除所有错误
@@ -489,6 +492,16 @@ func IsErrorCode(err error, code ErrorCode) bool {
 func WrapError(err error, code ErrorCode, operation string) *ServiceError {
 	return NewError(code).
 		Operation(operation).
+		Message(err.Error()).
+		Cause(err).
+		Build()
+}
+
+// WrapServiceOperationError 包装带服务名的服务错误。
+func WrapServiceOperationError(err error, code ErrorCode, operation, serviceName string) *ServiceError {
+	return NewError(code).
+		Operation(operation).
+		Service(serviceName).
 		Message(err.Error()).
 		Cause(err).
 		Build()

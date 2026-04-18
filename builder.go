@@ -5,16 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // Builder CLI构建器 - 增强版
 type Builder struct {
-	config     *Config
-	cli        *Cli
-	validators []func(*Config) error
-	built      bool
-	service    ServiceRunner // 新增：支持ServiceRunner接口
+	config      *Config
+	cli         *Cli
+	pendingCmds []*Command
+	validators  []func(*Config) error
+	buildErrs   []error
+	built       bool
+	service     ServiceRunner // 新增：支持ServiceRunner接口
+	initHooks   []InitHook
 }
+
+// InitHook 在命令执行前执行的初始化钩子
+// 返回 error 则中断命令执行
+type InitHook func(cmd *cobra.Command, args []string) error
 
 // NewBuilder 创建CLI构建器
 // lang参数可选，指定默认语言
@@ -82,16 +91,40 @@ func (b *Builder) WithLanguage(lang string) *Builder {
 // WithCustomService 配置服务（高级用法）
 // 允许传入自定义配置函数来修改配置
 func (b *Builder) WithCustomService(fn func(*Config)) *Builder {
+	if fn == nil {
+		return b
+	}
 	fn(b.config)
+	return b
+}
+
+// WithServiceConfig 直接配置服务扩展字段。
+func (b *Builder) WithServiceConfig(fn func(*ServiceConfig)) *Builder {
+	if fn == nil {
+		return b
+	}
+	fn(b.config.service)
 	return b
 }
 
 // WithCommand 添加命令
 func (b *Builder) WithCommand(cmd *Command) *Builder {
-	if b.cli == nil {
-		b.Build()
+	if cmd == nil {
+		return b
 	}
-	b.cli.AddCommand(cmd)
+	if b.built && b.cli != nil {
+		b.cli.AddCommand(cmd)
+		return b
+	}
+	b.pendingCmds = append(b.pendingCmds, cmd)
+	return b
+}
+
+// WithInitHook 注册初始化钩子
+func (b *Builder) WithInitHook(hook InitHook) *Builder {
+	if hook != nil {
+		b.initHooks = append(b.initHooks, hook)
+	}
 	return b
 }
 
@@ -121,6 +154,31 @@ func (b *Builder) WithWorkDir(dir string) *Builder {
 	return b
 }
 
+// WithServiceUser 设置系统服务运行用户。
+func (b *Builder) WithServiceUser(username string) *Builder {
+	b.config.service.Username = username
+	return b
+}
+
+// WithExecutable 设置系统服务安装时使用的可执行文件路径。
+func (b *Builder) WithExecutable(path string) *Builder {
+	b.config.service.Executable = path
+	return b
+}
+
+// WithArguments 设置系统服务运行参数。
+// 传入空参数列表会显式清空默认的 "run" 参数。
+func (b *Builder) WithArguments(args ...string) *Builder {
+	b.config.service.Arguments = append([]string(nil), args...)
+	return b
+}
+
+// WithChRoot 设置 chroot 目录。
+func (b *Builder) WithChRoot(dir string) *Builder {
+	b.config.service.ChRoot = dir
+	return b
+}
+
 // WithBuildTime 设置构建时间
 func (b *Builder) WithBuildTime(buildTime string) *Builder {
 	parsedTime, err := time.Parse(time.DateTime, buildTime)
@@ -141,7 +199,74 @@ func (b *Builder) WithEnvVar(key, value string) *Builder {
 
 // WithDependencies 设置依赖
 func (b *Builder) WithDependencies(deps ...string) *Builder {
-	b.config.service.Dependencies = deps
+	structured := make([]Dependency, 0, len(deps))
+	for _, dep := range deps {
+		if dep == "" {
+			continue
+		}
+		structured = append(structured, Dependency{Name: dep, Type: DependencyRequire})
+	}
+	b.config.service.StructuredDeps = structured
+	b.config.service.Dependencies = nil
+	return b
+}
+
+// WithLegacyDependencies 设置 daemon 原生字符串依赖。
+func (b *Builder) WithLegacyDependencies(deps ...string) *Builder {
+	b.config.service.Dependencies = append([]string(nil), deps...)
+	b.config.service.StructuredDeps = nil
+	return b
+}
+
+// WithStructuredDependencies 设置结构化依赖。
+func (b *Builder) WithStructuredDependencies(deps ...Dependency) *Builder {
+	b.config.service.StructuredDeps = append([]Dependency(nil), deps...)
+	b.config.service.Dependencies = nil
+	return b
+}
+
+// WithDependency 追加单个结构化依赖。
+func (b *Builder) WithDependency(name string, depType DependencyType) *Builder {
+	if name == "" {
+		return b
+	}
+	b.config.service.Dependencies = nil
+	b.config.service.StructuredDeps = append(
+		b.config.service.StructuredDeps,
+		Dependency{Name: name, Type: depType},
+	)
+	return b
+}
+
+// WithServiceOption 设置单个 daemon 平台选项。
+func (b *Builder) WithServiceOption(key string, value any) *Builder {
+	if key == "" {
+		return b
+	}
+	if b.config.service.Options == nil {
+		b.config.service.Options = make(ServiceOptions)
+	}
+	b.config.service.Options[key] = value
+	return b
+}
+
+// WithServiceOptionsMap 批量合并 daemon 平台选项。
+func (b *Builder) WithServiceOptionsMap(options ServiceOptions) *Builder {
+	if len(options) == 0 {
+		return b
+	}
+	if b.config.service.Options == nil {
+		b.config.service.Options = make(ServiceOptions)
+	}
+	for key, value := range options {
+		b.config.service.Options[key] = value
+	}
+	return b
+}
+
+// WithAllowSudoFallback 设置 daemon 的 sudo/su 回退策略。
+func (b *Builder) WithAllowSudoFallback(enabled bool) *Builder {
+	b.config.service.AllowSudoFallback = enabled
 	return b
 }
 
@@ -169,7 +294,11 @@ func (b *Builder) WithService(run RunFunc, stop ...StopFunc) *Builder {
 // WithServiceRunner 配置优雅的服务接口（推荐方式）
 func (b *Builder) WithServiceRunner(service ServiceRunner) *Builder {
 	if service == nil {
-		panic("service cannot be nil")
+		b.buildErrs = append(b.buildErrs, errors.New("service cannot be nil"))
+		b.service = nil
+		b.config.runtime.Run = nil
+		b.config.runtime.Stop = nil
+		return b
 	}
 	b.service = service
 
@@ -195,6 +324,19 @@ func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder {
 	return b
 }
 
+// WithMousetrapDisabled 禁用 Windows 双击运行提示
+func (b *Builder) WithMousetrapDisabled(disabled bool) *Builder {
+	b.config.basic.MousetrapDisabled = disabled
+	return b
+}
+
+// WithErrorHandler 添加错误处理器
+func (b *Builder) WithErrorHandler(handler ErrorHandler) *Builder {
+	if handler != nil {
+		b.config.runtime.ErrorHandlers = append(b.config.runtime.ErrorHandlers, handler)
+	}
+	return b
+}
 
 // WithValidator 添加配置验证器
 func (b *Builder) WithValidator(validator func(*Config) error) *Builder {
@@ -225,9 +367,7 @@ func (b *Builder) Build() *Cli {
 		panic(fmt.Sprintf("build failed: %v", err))
 	}
 
-	if b.cli == nil {
-		b.cli = NewCli(WithConfig(b.config))
-	}
+	b.cli = b.finalizeCLI()
 
 	b.built = true
 	return b.cli
@@ -249,12 +389,24 @@ func (b *Builder) BuildWithError() (*Cli, error) {
 		return nil, fmt.Errorf("build failed: %w", err)
 	}
 
-	if b.cli == nil {
-		b.cli = NewCli(WithConfig(b.config))
-	}
+	b.cli = b.finalizeCLI()
 
 	b.built = true
 	return b.cli, nil
+}
+
+func (b *Builder) finalizeCLI() *Cli {
+	if b.cli == nil {
+		b.cli = NewCli(WithConfig(b.config))
+	}
+	if len(b.pendingCmds) > 0 {
+		b.cli.AddCommand(b.pendingCmds...)
+		b.pendingCmds = nil
+	}
+	if len(b.initHooks) > 0 {
+		b.attachInitHooks(b.cli.Command())
+	}
+	return b.cli
 }
 
 // validate 验证配置
@@ -265,6 +417,8 @@ func (b *Builder) validate() error {
 	if b.config.basic.Name == "" {
 		errs = append(errs, errors.New("application name is required"))
 	}
+
+	errs = append(errs, b.buildErrs...)
 
 	// 服务相关验证
 	if b.config.runtime.Run != nil && b.config.basic.Name == "" {
@@ -283,6 +437,30 @@ func (b *Builder) validate() error {
 	}
 
 	return nil
+}
+
+func (b *Builder) attachInitHooks(root *cobra.Command) {
+	if root == nil {
+		return
+	}
+	if len(b.initHooks) == 0 {
+		return
+	}
+
+	prev := root.PersistentPreRunE
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if prev != nil {
+			if err := prev(cmd, args); err != nil {
+				return err
+			}
+		}
+		for _, hook := range b.initHooks {
+			if err := hook(cmd, args); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // BuildError 构建错误

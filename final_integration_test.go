@@ -197,11 +197,8 @@ func TestBackwardCompatibility(t *testing.T) {
 		t.Error("Flags should be available")
 	}
 
-	// 执行相关
-	ctx := cli.Context()
-	if ctx == nil {
-		t.Error("Context should be available")
-	}
+	// 执行相关：未执行前，Context 允许为 nil（与原生 Cobra 行为一致）
+	_ = cli.Context()
 
 	// 查询操作
 	name := cli.Name()

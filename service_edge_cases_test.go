@@ -26,7 +26,7 @@ func TestStopFuncOnce(t *testing.T) {
 	}
 
 	// 避免调用 daemon.Service 带来的后台 goroutine 竞态，直接跑 sm.Run
-	go sm.Run(sm.ctx)
+	go sm.Run(sm.getCtx())
 	time.Sleep(10 * time.Millisecond) // 让 Run 进入阻塞态
 	_ = sm.Stop()
 	_ = sm.Stop()
@@ -54,7 +54,7 @@ func TestInteractiveCallsStopFunctions(t *testing.T) {
 	}
 
 	// 与 TestStopFuncOnce 一致，避免 daemon 包产生的竞态，直接走 sm.Run
-	go sm.Run(sm.ctx)
+	go sm.Run(sm.getCtx())
 	time.Sleep(10 * time.Millisecond)
 	sm.stopExecuted.Store(false)
 	sm.callStopFunctions()
@@ -84,6 +84,9 @@ func TestCheckPermissions(t *testing.T) {
 	dir := filepath.Join(tdir, "d")
 	if err := os.Mkdir(dir, 0o555); err != nil {
 		t.Fatalf("mkdir: %v", err)
+	}
+	if err := checkPermissions(dir, 0o755, loc); err == nil {
+		t.Fatalf("expected needFile error")
 	}
 	if err := checkPermissions(dir, os.ModeDir|0o700, loc); err == nil {
 		t.Fatalf("expected write perm error")
