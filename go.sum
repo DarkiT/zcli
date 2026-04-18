@@ -1,6 +1,6 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/darkit/daemon v1.2.5 h1:kWNtsnFaVy+pZ2LLQvo7shejudjQwgMXN48N2pd5ytE=
-github.com/darkit/daemon v1.2.5/go.mod h1:GhNWID0Pk42URXPpo3R28EqXU5jOjgwTCE/s8+alJAw=
+github.com/darkit/daemon v1.3.0 h1:fzxMSZ2rv+ZAYABKMIwQ+RALj+qHlTbdQhvq5Le8aeE=
+github.com/darkit/daemon v1.3.0/go.mod h1:l56855OP55zd6CTPy8SV2qKRYgpi8uxqi9UOEKje7qQ=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
