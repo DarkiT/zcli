@@ -1,17 +1,18 @@
 # DarkiT-ZCli API 参考
 
+> 契约说明：当前主线遵循 **兼容内核 + 增强装配 + 优雅糖层**。  
+> 常规使用路径优先使用 `zcli` 暴露的类型和方法；高级互操作场景仍允许直达底层 Cobra / pflag 能力。  
+> 详细边界见 `cobra-fusion-contract.md`。
+
 ## Builder API
 
 ### 创建 Builder
 
 ```go
-func NewBuilder(language string) *Builder
+func NewBuilder(lang ...string) *Builder
 ```
 
-创建新的 Builder 实例。
-
-**参数**：
-- `language`: 语言代码（"zh" 或 "en"）
+创建新的 Builder 实例。`lang` 可选；未传时使用默认配置，传入 `"zh"` / `"en"` 可指定初始语言。
 
 **返回**：
 - `*Builder`: Builder 实例
@@ -63,6 +64,19 @@ func (b *Builder) WithLogo(logo string) *Builder
 func (b *Builder) WithLanguage(lang string) *Builder
 ```
 设置语言。
+
+---
+
+```go
+func (b *Builder) WithGitInfo(commitID, branch, tag string) *Builder
+func (b *Builder) WithBuildTime(buildTime string) *Builder
+func (b *Builder) WithDebug(debug bool) *Builder
+func (b *Builder) WithDefaults() *Builder
+func (b *Builder) WithDefaultConfig() *Builder
+func (b *Builder) WithQuickConfig(name, displayName, description, version string) *Builder
+```
+
+设置构建信息、调试标记和常用默认值。
 
 ### 服务配置方法
 
@@ -149,7 +163,44 @@ func (b *Builder) WithEnvVar(key, value string) *Builder
 ```go
 func (b *Builder) WithDependencies(deps ...string) *Builder
 ```
-设置服务依赖。
+设置 require 型结构化依赖，并清空 daemon 原生字符串依赖。
+
+---
+
+```go
+func (b *Builder) WithLegacyDependencies(deps ...string) *Builder
+func (b *Builder) WithStructuredDependencies(deps ...Dependency) *Builder
+func (b *Builder) WithDependency(name string, depType DependencyType) *Builder
+```
+
+设置 daemon 原生字符串依赖或结构化依赖。
+
+---
+
+```go
+func (b *Builder) WithServiceUser(username string) *Builder
+func (b *Builder) WithExecutable(path string) *Builder
+func (b *Builder) WithArguments(args ...string) *Builder
+func (b *Builder) WithChRoot(dir string) *Builder
+func (b *Builder) WithServiceOption(key string, value any) *Builder
+func (b *Builder) WithServiceOptionsMap(options ServiceOptions) *Builder
+func (b *Builder) WithAllowSudoFallback(enabled bool) *Builder
+func (b *Builder) WithServiceConfig(fn func(*ServiceConfig)) *Builder
+```
+
+配置系统服务安装与平台特定选项。`WithArguments()` 传入空列表会显式清空默认的 `"run"` 参数。
+
+---
+
+```go
+func (b *Builder) WithShutdownTimeouts(initial, grace time.Duration) *Builder
+func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder
+func (b *Builder) WithMousetrapDisabled(disabled bool) *Builder
+func (b *Builder) WithRuntime(rt *Runtime) *Builder
+func (b *Builder) WithContext(ctx context.Context) *Builder
+```
+
+设置运行时上下文、分级优雅关闭超时、daemon 启动/停止超时和 Windows mousetrap 行为。
 
 ---
 
@@ -164,8 +215,9 @@ func (b *Builder) WithErrorHandler(handler ErrorHandler) *Builder
 **示例**：
 
 ```go
-builder.WithErrorHandler(zcli.LoggingErrorHandler{})
-builder.WithErrorHandler(zcli.RecoveryErrorHandler{})
+logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+builder.WithErrorHandler(zcli.NewLoggingErrorHandler(slogAdapter{logger}))
+builder.WithErrorHandler(zcli.NewRecoveryErrorHandler(3, time.Second))
 ```
 
 ### 构建方法
@@ -214,7 +266,7 @@ func (c *Cli) ExecuteContext(ctx context.Context) error
 ### 命令管理
 
 ```go
-func (c *Cli) AddCommand(cmds ...*cobra.Command)
+func (c *Cli) AddCommand(cmds ...*Command)
 ```
 
 添加自定义命令。
@@ -222,34 +274,46 @@ func (c *Cli) AddCommand(cmds ...*cobra.Command)
 **示例**：
 
 ```go
-cmd := &cobra.Command{
+cmd := &zcli.Command{
     Use:   "custom",
     Short: "自定义命令",
-    Run: func(cmd *cobra.Command, args []string) {
+    Run: func(cmd *zcli.Command, args []string) {
         fmt.Println("执行自定义命令")
     },
 }
 app.AddCommand(cmd)
 ```
 
+---
+
+```go
+func (c *Cli) Command() *Command
+```
+
+返回底层根命令，作为高级互操作的 raw escape hatch。`zcli.Command` 是 `cobra.Command` 类型别名，因此返回值仍是 Cobra 原生命令对象。
+
+**使用建议**：
+- 常规路径优先使用 `zcli.Command`
+- 只有在必须调用底层 Cobra 特性、且 `Cli` 尚未提供对应快捷方法时，再使用该接口
+
 ### 标志管理
 
 ```go
-func (c *Cli) Flags() *pflag.FlagSet
+func (c *Cli) Flags() *FlagSet
 ```
 获取标志集合。
 
 ---
 
 ```go
-func (c *Cli) PersistentFlags() *pflag.FlagSet
+func (c *Cli) PersistentFlags() *FlagSet
 ```
 获取持久化标志。
 
 ---
 
 ```go
-func (c *Cli) ExportFlagsForViper(exclude ...string) []*pflag.FlagSet
+func (c *Cli) ExportFlagsForViper(exclude ...string) []*FlagSet
 ```
 
 导出标志给 Viper，自动过滤 23 个系统标志。
@@ -258,8 +322,9 @@ func (c *Cli) ExportFlagsForViper(exclude ...string) []*pflag.FlagSet
 - 帮助系统：`help`, `h`
 - 版本系统：`version`, `v`
 - 补全系统：`completion`, `*-completion`, `gen-completion`
-- 调试系统：`debug`, `verbose`, `quiet`
-- 更多...
+- Cobra 内部补全：`__complete`, `__completeNoDesc`, `no-descriptions`
+- 兼容补全：`bash-completion`, `zsh-completion`, `fish-completion`, `powershell-completion`
+- 配置系统常见辅助标志：`config-help`, `print-config`, `validate-config`
 
 **示例**：
 
@@ -270,6 +335,27 @@ for _, fs := range flags {
     viper.BindPFlags(fs)
 }
 ```
+
+## 兼容性边界
+
+### 公开词汇
+
+- 推荐对外使用 `*zcli.Command`
+- 推荐对外使用 `*zcli.FlagSet`
+- 推荐通过 `BuildWithError()` 处理构建阶段错误
+
+### 原生互操作
+
+以下场景仍允许直接使用底层 Cobra / pflag：
+
+- `app.Command()` 取得根命令并调用尚未包进 `Cli` 的底层能力
+- 与第三方库做 flag / completion / hook 级互操作
+- 调试或渐进迁移期间，需要核对底层对象行为
+
+### Go 版本说明
+
+- 当前源码基线以仓库 `go.mod` 为准
+- 若外部文档与 `go.mod` 存在不一致，以源码与验证结果为准，不以旧文案为准
 
 ## ServiceRunner 接口
 
@@ -286,8 +372,8 @@ type ServiceRunner interface {
 **Run 方法**：
 - 运行服务主逻辑
 - 必须监听 `ctx.Done()` 实现优雅关闭
-- 返回 `nil` 表示正常退出
-- 返回 `error` 表示异常退出
+- 正常关闭推荐返回 `nil`；底层会把 `context.Canceled` / `context.DeadlineExceeded` / `ShutdownCause` 归一为成功退出
+- 返回业务 `error` 表示异常退出
 
 **Stop 方法**：
 - 停止服务，执行清理工作
@@ -425,7 +511,7 @@ func (eb *ErrorBuilder) Service(service string) *ErrorBuilder
 func (eb *ErrorBuilder) Operation(operation string) *ErrorBuilder
 func (eb *ErrorBuilder) Message(message string) *ErrorBuilder
 func (eb *ErrorBuilder) Cause(cause error) *ErrorBuilder
-func (eb *ErrorBuilder) WithContext(key string, value any) *ErrorBuilder
+func (eb *ErrorBuilder) Context(key string, value any) *ErrorBuilder
 func (eb *ErrorBuilder) Build() *ServiceError
 ```
 
@@ -437,7 +523,7 @@ err := zcli.NewError(zcli.ErrServiceStart).
     Operation("connect").
     Message("连接失败").
     Cause(sqlErr).
-    WithContext("host", "localhost").
+    Context("host", "localhost").
     Build()
 ```
 

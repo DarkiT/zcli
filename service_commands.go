@@ -1,7 +1,6 @@
 package zcli
 
 import (
-	"context"
 	"errors"
 
 	service "github.com/darkit/daemon"
@@ -10,29 +9,34 @@ import (
 
 // initService 初始化服务
 func (c *Cli) initService() {
-	// 使用外部上下文，信号处理由 service.RunWait 负责
-	ctx, cancel := context.WithCancel(c.config.Context())
-
 	// 检查是否设置了服务运行函数
 	if c.config.runtime.Run == nil {
-		cancel()
 		return
 	}
 
 	// 创建服务管理器
-	sm, err := newServiceManager(c, ctx, cancel)
+	sm, err := c.newServiceAssemblyManager()
 	if err != nil {
 		_, _ = c.colors.Error.Printf("%v\n", err)
 		return
 	}
 
 	// 添加服务命令并配置根命令运行函数
-	c.addServiceCommands(sm)
+	c.attachServiceAssembly(sm)
 }
 
-// executeStopFunctions 执行所有已注册的停止函数
+// attachServiceAssembly 把 service command adapter 与 root run 策略一起挂到当前 CLI。
+func (c *Cli) attachServiceAssembly(sm *sManager) {
+	if sm == nil {
+		return
+	}
 
-// addServiceCommands 添加服务管理命令
+	c.addServiceCommands(sm)
+	c.attachServiceRootRun(sm)
+}
+
+// addServiceCommands 添加服务管理命令。
+// 该阶段只负责命令树注入，不修改根命令默认运行策略。
 func (c *Cli) addServiceCommands(sm *sManager) {
 	// 向命令行应用添加服务管理命令
 	c.command.AddCommand(
@@ -44,8 +48,10 @@ func (c *Cli) addServiceCommands(sm *sManager) {
 		sm.newRestartCmd(),
 		sm.newStatusCmd(),
 	)
+}
 
-	// 设置根命令的运行函数，处理直接运行的情况
+// attachServiceRootRun 设置根命令的运行策略，处理直接运行的情况。
+func (c *Cli) attachServiceRootRun(sm *sManager) {
 	originalRun := c.command.Run
 	originalRunE := c.command.RunE
 	c.command.Run = nil

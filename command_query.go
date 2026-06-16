@@ -1,7 +1,5 @@
 package zcli
 
-import "github.com/spf13/cobra"
-
 // ============================================================================
 // 查询和状态方法
 // 用于查询命令的状态和属性信息
@@ -239,17 +237,19 @@ func (c *Cli) SetServiceRunning(running bool) {
 	// 预留接口，用于将来的服务状态管理
 }
 
-// Command 返回底层的 cobra.Command 指针
-// 用于需要直接操作 Cobra 原生 API 的高级场景
+// Command 返回底层根命令本身
+// 用于需要直接操作 Cobra 原生 API 的高级场景。
+// 由于 zcli.Command 是 cobra.Command 的类型别名，
+// 返回值既保留 zcli 词汇，也继续是同一个 Cobra 原生对象。
 //
 // 示例：
 //
 //	cmd := app.Command()
 //	cmd.AddCommand(customCmd)
-//	cmd.PreRun = func(cmd *cobra.Command, args []string) {
+//	cmd.PreRun = func(cmd *zcli.Command, args []string) {
 //	    // 自定义预运行逻辑
 //	}
-func (c *Cli) Command() *cobra.Command {
+func (c *Cli) Command() *Command {
 	return c.command
 }
 

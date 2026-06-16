@@ -1,11 +1,74 @@
 package zcli
 
-import "io"
+import (
+	"fmt"
+	"io"
+)
 
 // ============================================================================
 // 命令行补全方法
 // 用于生成各种Shell的命令行补全脚本
 // ============================================================================
+
+// CompletionShell 表示命令补全脚本的目标 shell。
+type CompletionShell string
+
+const (
+	// CompletionShellBash 表示 Bash 补全脚本。
+	CompletionShellBash CompletionShell = "bash"
+	// CompletionShellZsh 表示 Zsh 补全脚本。
+	CompletionShellZsh CompletionShell = "zsh"
+	// CompletionShellFish 表示 Fish 补全脚本。
+	CompletionShellFish CompletionShell = "fish"
+	// CompletionShellPowerShell 表示 PowerShell 补全脚本。
+	CompletionShellPowerShell CompletionShell = "powershell"
+)
+
+// GenCompletion 根据目标 shell 生成补全脚本并写入指定 Writer。
+// includeDesc 仅对支持描述信息的 shell 生效；其余 shell 会忽略该参数。
+func (c *Cli) GenCompletion(shell CompletionShell, w io.Writer, includeDesc bool) error {
+	switch shell {
+	case CompletionShellBash:
+		return c.GenBashCompletionV2(w, includeDesc)
+	case CompletionShellZsh:
+		if includeDesc {
+			return c.GenZshCompletion(w)
+		}
+		return c.GenZshCompletionNoDesc(w)
+	case CompletionShellFish:
+		return c.GenFishCompletion(w, includeDesc)
+	case CompletionShellPowerShell:
+		if includeDesc {
+			return c.GenPowerShellCompletionWithDesc(w)
+		}
+		return c.GenPowerShellCompletion(w)
+	default:
+		return fmt.Errorf("unsupported completion shell: %s", shell)
+	}
+}
+
+// GenCompletionFile 根据目标 shell 生成补全脚本并写入指定文件。
+// includeDesc 仅对支持描述信息的 shell 生效；其余 shell 会忽略该参数。
+func (c *Cli) GenCompletionFile(shell CompletionShell, filename string, includeDesc bool) error {
+	switch shell {
+	case CompletionShellBash:
+		return c.GenBashCompletionFileV2(filename, includeDesc)
+	case CompletionShellZsh:
+		if includeDesc {
+			return c.GenZshCompletionFile(filename)
+		}
+		return c.GenZshCompletionFileNoDesc(filename)
+	case CompletionShellFish:
+		return c.GenFishCompletionFile(filename, includeDesc)
+	case CompletionShellPowerShell:
+		if includeDesc {
+			return c.GenPowerShellCompletionFileWithDesc(filename)
+		}
+		return c.GenPowerShellCompletionFile(filename)
+	default:
+		return fmt.Errorf("unsupported completion shell: %s", shell)
+	}
+}
 
 // GenBashCompletion 生成 Bash 补全脚本并写入指定的 Writer
 func (c *Cli) GenBashCompletion(w io.Writer) error {

@@ -2,6 +2,7 @@ package zcli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,84 @@ func TestFinalIntegration(t *testing.T) {
 	})
 }
 
+func TestAppAssemblyPipeline(t *testing.T) {
+	t.Run("NewApp 与 NewCli 共享同一装配内核", func(t *testing.T) {
+		app := NewApp(
+			WithConfig(func() *Config {
+				cfg := NewConfig()
+				cfg.basic.Name = "app-entry"
+				cfg.basic.Description = "app entry description"
+				return cfg
+			}()),
+		)
+		if app == nil {
+			t.Fatal("NewApp 应返回有效实例")
+		}
+		if app.Command() == nil {
+			t.Fatal("NewApp 应初始化根命令")
+		}
+		if app.Name() != "app-entry" {
+			t.Fatalf("期望根命令名称为 app-entry，实际为 %q", app.Name())
+		}
+		if app.command.Short != "app entry description" {
+			t.Fatalf("期望根命令短描述已装配，实际为 %q", app.command.Short)
+		}
+		if !app.command.CompletionOptions.DisableDefaultCmd {
+			t.Fatal("根命令应禁用 Cobra 默认 completion 命令")
+		}
+		if app.Command().HelpFunc() == nil {
+			t.Fatal("根命令应挂载 help 渲染函数")
+		}
+	})
+
+	t.Run("Builder 装配顺序应先挂命令和 help，再挂 init hook 与 service command", func(t *testing.T) {
+		var hookCalled bool
+
+		app, err := NewBuilder("en").
+			WithName("builder-assembly").
+			WithDescription("builder assembly").
+			WithService(func(ctx context.Context) error {
+				<-ctx.Done()
+				return nil
+			}).
+			WithCommand(&Command{
+				Use: "inspect",
+				Run: func(cmd *Command, args []string) {},
+			}).
+			WithInitHook(func(cmd *Command, args []string) error {
+				hookCalled = true
+				return nil
+			}).
+			BuildWithError()
+		if err != nil {
+			t.Fatalf("BuildWithError 失败: %v", err)
+		}
+
+		for _, name := range []string{"run", "install", "uninstall", "start", "stop", "restart", "status"} {
+			cmd, _, findErr := app.Command().Find([]string{name})
+			if findErr != nil || cmd == nil || cmd.Name() != name {
+				t.Fatalf("期望命令 %q 已装配，cmd=%v err=%v", name, cmd, findErr)
+			}
+		}
+		cmd, _, findErr := app.Command().Find([]string{"inspect"})
+		if findErr != nil || cmd == nil || cmd.Name() != "inspect" {
+			t.Fatalf("期望自定义命令 inspect 已在 service 命令注入前装配，cmd=%v err=%v", cmd, findErr)
+		}
+
+		if app.Command().HelpFunc() == nil {
+			t.Fatal("Builder 装配后应保留 help 渲染函数")
+		}
+
+		app.SetArgs([]string{"inspect"})
+		if err := app.Execute(); err != nil {
+			t.Fatalf("执行自定义命令失败: %v", err)
+		}
+		if !hookCalled {
+			t.Fatal("执行命令时应先触发 init hook")
+		}
+	})
+}
+
 // TestAllPhasesCompleted 测试所有阶段是否完成
 func TestAllPhasesCompleted(t *testing.T) {
 	// 阶段1：并发安全问题修复
@@ -177,6 +256,64 @@ func TestAllPhasesCompleted(t *testing.T) {
 	})
 }
 
+func TestReleaseReadinessScenarios(t *testing.T) {
+	t.Run("NewApp 与 NewCommand 主路径可直接联动", func(t *testing.T) {
+		app := NewApp()
+		if app == nil {
+			t.Fatal("NewApp 应返回有效实例")
+		}
+		app.config.basic.Name = "release-ready"
+		app.config.basic.Description = "release readiness check"
+		app.config.basic.Version = "1.0.0"
+		app.command.Use = app.config.basic.Name
+		app.command.Short = app.config.basic.Description
+		app.command.Version = app.config.basic.Version
+
+		cmd := NewCommand(
+			"inspect",
+			"Inspect release ready state",
+			WithCommandRun(func(cmd *Command, args []string) {}),
+		)
+		app.AddCommand(cmd)
+
+		found, _, err := app.Command().Find([]string{"inspect"})
+		if err != nil {
+			t.Fatalf("查找 inspect 命令失败: %v", err)
+		}
+		if found == nil || found.Name() != "inspect" {
+			t.Fatalf("期望找到 inspect 命令，实际为 %v", found)
+		}
+	})
+
+	t.Run("Flag export 与 completion 主路径保持可用", func(t *testing.T) {
+		app, err := NewBuilder("en").
+			WithName("release-flags").
+			WithDescription("release flag path").
+			WithCommand(NewCommand("inspect", "Inspect release flags")).
+			BuildWithError()
+		if err != nil {
+			t.Fatalf("BuildWithError 失败: %v", err)
+		}
+
+		app.PersistentFlags().String("config", "", "Path to config")
+		app.PersistentFlags().Bool("debug", false, "Enable debug logging")
+		app.Flags().String("profile", "dev", "Runtime profile")
+
+		flags := app.ExportFlagsForViper("debug")
+		if len(flags) == 0 {
+			t.Fatal("ExportFlagsForViper 应导出非空 flag sets")
+		}
+
+		var bashOut bytes.Buffer
+		if err := app.GenCompletion(CompletionShellBash, &bashOut, true); err != nil {
+			t.Fatalf("GenCompletion 失败: %v", err)
+		}
+		if bashOut.Len() == 0 {
+			t.Fatal("completion 输出不应为空")
+		}
+	})
+}
+
 // TestBackwardCompatibility 测试向后兼容性
 func TestBackwardCompatibility(t *testing.T) {
 	// 确保原有的API调用方式仍然有效
@@ -220,7 +357,7 @@ func TestPerformanceRegression(t *testing.T) {
 		Build()
 
 	// 多次调用关键方法，确保没有性能问题
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_ = app.Commands()
 		_ = app.Flags()
 		_ = app.Name()

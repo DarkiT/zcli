@@ -7,14 +7,13 @@ import (
 	"sort"
 
 	"github.com/darkit/zcli"
-	"github.com/spf13/pflag"
 )
 
 type externalConfig struct {
-	flagSets []*pflag.FlagSet
+	flagSets []*zcli.FlagSet
 }
 
-func bindFlagSets(flagSets ...*pflag.FlagSet) func(*externalConfig) {
+func bindFlagSets(flagSets ...*zcli.FlagSet) func(*externalConfig) {
 	return func(cfg *externalConfig) {
 		cfg.flagSets = flagSets
 	}
@@ -43,10 +42,10 @@ func main() {
 }
 
 func newInspectCommand(app *zcli.Cli) *zcli.Command {
-	return &zcli.Command{
-		Use:   "inspect",
-		Short: "Show which flags can be exported to another package",
-		RunE: func(cmd *zcli.Command, args []string) error {
+	return zcli.NewCommand(
+		"inspect",
+		"Show which flags can be exported to another package",
+		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			forwarded := app.ExportFlagsForViper("debug")
 			external := &externalConfig{}
 			bindFlagSets(forwarded...)(external)
@@ -63,7 +62,7 @@ func newInspectCommand(app *zcli.Cli) *zcli.Command {
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "changed values that would be forwarded:")
 
 			for _, flagSet := range external.flagSets {
-				flagSet.VisitAll(func(flag *pflag.Flag) {
+				flagSet.VisitAll(func(flag *zcli.Flag) {
 					if flag.Changed {
 						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s = %s\n", flag.Name, flag.Value.String())
 					}
@@ -71,8 +70,8 @@ func newInspectCommand(app *zcli.Cli) *zcli.Command {
 			}
 
 			return nil
-		},
-	}
+		}),
+	)
 }
 
 func setupFlags(app *zcli.Cli, inspectCmd *zcli.Command) {

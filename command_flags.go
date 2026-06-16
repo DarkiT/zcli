@@ -6,6 +6,20 @@ import (
 	"github.com/spf13/pflag"
 )
 
+type (
+	// ErrorHandling 复用 pflag 的错误处理策略类型。
+	ErrorHandling = pflag.ErrorHandling
+)
+
+const (
+	// ContinueOnError 表示遇到错误时返回错误，由调用方自行处理。
+	ContinueOnError = pflag.ContinueOnError
+	// ExitOnError 表示遇到错误时直接退出程序。
+	ExitOnError = pflag.ExitOnError
+	// PanicOnError 表示遇到错误时触发 panic。
+	PanicOnError = pflag.PanicOnError
+)
+
 // ============================================================================
 // 便捷标志导出方法
 // 用于导出标志给外部包使用，支持过滤和批量操作
@@ -80,9 +94,9 @@ func (f *flagFilter) shouldInclude(flagName string) bool {
 
 // createFilteredFlagSet 创建过滤后的标志集合
 func (f *flagFilter) createFilteredFlagSet(source *FlagSet, name string) *FlagSet {
-	filtered := pflag.NewFlagSet(name, pflag.ContinueOnError)
+	filtered := NewFlagSet(name)
 
-	source.VisitAll(func(flag *pflag.Flag) {
+	source.VisitAll(func(flag *Flag) {
 		if f.shouldInclude(flag.Name) {
 			filtered.AddFlag(flag)
 		}
@@ -157,7 +171,7 @@ func (c *Cli) GetFlagNames(includeInherited bool) []string {
 	nameSet := make(map[string]bool)
 
 	// 收集本地和持久标志
-	c.Flags().VisitAll(func(flag *pflag.Flag) {
+	c.Flags().VisitAll(func(flag *Flag) {
 		if !nameSet[flag.Name] {
 			names = append(names, flag.Name)
 			nameSet[flag.Name] = true
@@ -166,7 +180,7 @@ func (c *Cli) GetFlagNames(includeInherited bool) []string {
 
 	// 如果需要，添加继承的标志
 	if includeInherited {
-		c.InheritedFlags().VisitAll(func(flag *pflag.Flag) {
+		c.InheritedFlags().VisitAll(func(flag *Flag) {
 			if !nameSet[flag.Name] {
 				names = append(names, flag.Name)
 				nameSet[flag.Name] = true
@@ -183,7 +197,7 @@ func (c *Cli) GetFilteredFlagNames(excludeFlags ...string) []string {
 	var names []string
 	nameSet := make(map[string]bool)
 
-	c.Flags().VisitAll(func(flag *pflag.Flag) {
+	c.Flags().VisitAll(func(flag *Flag) {
 		if filter.shouldInclude(flag.Name) && !nameSet[flag.Name] {
 			names = append(names, flag.Name)
 			nameSet[flag.Name] = true
@@ -203,4 +217,15 @@ func (c *Cli) GetSystemFlags() []string {
 func (c *Cli) IsSystemFlag(flagName string) bool {
 	systemFlags := getDefaultSystemFlags()
 	return systemFlags[flagName]
+}
+
+// NewFlagSet 创建新的 zcli 标志集合。
+// 返回值仍是 pflag.FlagSet 的同一对象身份，只是把常规构造路径收束到 zcli 词汇。
+func NewFlagSet(name string) *FlagSet {
+	return newFlagSetWithErrorHandling(name, ContinueOnError)
+}
+
+// newFlagSetWithErrorHandling 创建可指定错误处理策略的标志集合。
+func newFlagSetWithErrorHandling(name string, handling ErrorHandling) *FlagSet {
+	return pflag.NewFlagSet(name, pflag.ErrorHandling(handling))
 }

@@ -22,7 +22,7 @@
 
 1. `RunFunc` 或 `ServiceRunner.Run` 是否监听 `ctx.Done()`
 2. ticker / worker / goroutine 是否跟随 context 收敛
-3. `WithShutdownTimeouts` 与 `WithServiceTimeouts` 是否设置合理
+3. `WithServiceTimeouts` 是否设置合理，并确认其已同步写入系统服务启动/停止超时
 
 建议联查：
 

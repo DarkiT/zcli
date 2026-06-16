@@ -12,15 +12,36 @@ import (
 )
 
 type (
-	Flag               = pflag.Flag
-	FlagSet            = pflag.FlagSet
-	NormalizedName     = pflag.NormalizedName
-	Command            = cobra.Command
+	Flag           = pflag.Flag
+	FlagSet        = pflag.FlagSet
+	NormalizedName = pflag.NormalizedName
+	Command        = cobra.Command
+	// Completion 复用 Cobra 的 completion 条目类型，保持公开类型身份一致。
+	Completion = cobra.Completion
+	// CompletionFunc 复用 Cobra 的 completion 回调签名，避免暴露底层包名。
+	CompletionFunc     = cobra.CompletionFunc
 	ShellCompDirective = cobra.ShellCompDirective
 	CompletionOptions  = cobra.CompletionOptions
 	FParseErrWhitelist = cobra.FParseErrWhitelist
 	Group              = cobra.Group
 	PositionalArgs     = cobra.PositionalArgs
+)
+
+const (
+	// ShellCompDirectiveDefault 表示使用 shell 默认补全行为。
+	ShellCompDirectiveDefault = cobra.ShellCompDirectiveDefault
+	// ShellCompDirectiveError 表示补全过程出现错误。
+	ShellCompDirectiveError = cobra.ShellCompDirectiveError
+	// ShellCompDirectiveNoSpace 表示补全项后不自动追加空格。
+	ShellCompDirectiveNoSpace = cobra.ShellCompDirectiveNoSpace
+	// ShellCompDirectiveNoFileComp 表示禁用文件补全回退。
+	ShellCompDirectiveNoFileComp = cobra.ShellCompDirectiveNoFileComp
+	// ShellCompDirectiveFilterFileExt 表示按文件扩展名过滤补全结果。
+	ShellCompDirectiveFilterFileExt = cobra.ShellCompDirectiveFilterFileExt
+	// ShellCompDirectiveFilterDirs 表示只补全目录。
+	ShellCompDirectiveFilterDirs = cobra.ShellCompDirectiveFilterDirs
+	// ShellCompDirectiveKeepOrder 表示保持补全结果原始顺序。
+	ShellCompDirectiveKeepOrder = cobra.ShellCompDirectiveKeepOrder
 )
 
 var (
@@ -32,6 +53,26 @@ var (
 	MousetrapDisplayDuration = cobra.MousetrapDisplayDuration
 	cobraGlobalsMu           sync.Mutex
 )
+
+// AppendActiveHelp 追加 Active Help 文本，保持与 Cobra 一致的补全协议。
+func AppendActiveHelp(compArray []Completion, activeHelpStr string) []Completion {
+	return cobra.AppendActiveHelp(compArray, activeHelpStr)
+}
+
+// CompletionWithDesc 生成带描述的补全项，供 shell completion 直接复用。
+func CompletionWithDesc(choice string, description string) Completion {
+	return cobra.CompletionWithDesc(choice, description)
+}
+
+// FixedCompletions 返回固定补全列表，语义与 Cobra 原生 helper 保持一致。
+func FixedCompletions(choices []Completion, directive ShellCompDirective) CompletionFunc {
+	return cobra.FixedCompletions(choices, directive)
+}
+
+// NoFileCompletions 返回禁止文件补全的回调实现。
+func NoFileCompletions(cmd *Command, args []string, toComplete string) ([]Completion, ShellCompDirective) {
+	return cobra.NoFileCompletions(cmd, args, toComplete)
+}
 
 func syncCobraGlobals() {
 	cobra.EnablePrefixMatching = EnablePrefixMatching
@@ -264,7 +305,7 @@ func (c *Cli) Flag(name string) *Flag {
 }
 
 // GetFlagCompletionFunc 返回指定标志的补全函数（若已注册）
-func (c *Cli) GetFlagCompletionFunc(flagName string) (cobra.CompletionFunc, bool) {
+func (c *Cli) GetFlagCompletionFunc(flagName string) (CompletionFunc, bool) {
 	return c.command.GetFlagCompletionFunc(flagName)
 }
 

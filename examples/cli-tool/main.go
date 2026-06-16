@@ -52,10 +52,10 @@ func main() {
 }
 
 func newStatusCommand() *zcli.Command {
-	return &zcli.Command{
-		Use:   "status",
-		Short: "Show runtime configuration",
-		RunE: func(cmd *zcli.Command, args []string) error {
+	return zcli.NewCommand(
+		"status",
+		"Show runtime configuration",
+		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			profile, err := cmd.Root().PersistentFlags().GetString("profile")
 			if err != nil {
 				return err
@@ -74,20 +74,20 @@ func newStatusCommand() *zcli.Command {
 				time.Now().Format(time.RFC3339),
 			)
 			return nil
-		},
-	}
+		}),
+	)
 }
 
 func newEchoCommand() *zcli.Command {
-	return &zcli.Command{
-		Use:   "echo [message]",
-		Short: "Echo a message",
-		RunE: func(cmd *zcli.Command, args []string) error {
+	return zcli.NewCommand(
+		"echo [message]",
+		"Echo a message",
+		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("message is required")
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.Join(args, " "))
 			return nil
-		},
-	}
+		}),
+	)
 }

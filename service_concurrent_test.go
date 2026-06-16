@@ -46,7 +46,7 @@ func TestServiceConcurrentStop(t *testing.T) {
 
 	const goroutines = 20
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -79,7 +79,7 @@ func TestServiceChannelRaceCondition(t *testing.T) {
 	cli := &Cli{config: base, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
 
 	const rounds = 10
-	for i := 0; i < rounds; i++ {
+	for i := range rounds {
 		ctx, cancel := context.WithCancel(context.Background())
 		cfg := *base
 		cfg.runtime.Run = func(ctx context.Context) error { <-ctx.Done(); return nil }
@@ -468,7 +468,7 @@ func TestServiceRunCanRestartAfterStop(t *testing.T) {
 		t.Fatalf("newServiceManager: %v", err)
 	}
 
-	for round := 0; round < 2; round++ {
+	for round := range 2 {
 		runDone := make(chan struct{})
 		go func() {
 			defer close(runDone)

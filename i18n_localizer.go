@@ -94,7 +94,7 @@ func (sl *ServiceLocalizer) LogError(errorType string, err error) {
 }
 
 // LogWarning 记录警告日志
-func (sl *ServiceLocalizer) LogWarning(message string, args ...interface{}) {
+func (sl *ServiceLocalizer) LogWarning(message string, args ...any) {
 	text := fmt.Sprintf(message, args...)
 	if sl.colors != nil {
 		out := color.Output
@@ -135,7 +135,7 @@ func (sl *ServiceLocalizer) LogInfo(serviceName, status string) {
 }
 
 // FormatError 格式化错误消息
-func (sl *ServiceLocalizer) FormatError(errorType string, args ...interface{}) string {
+func (sl *ServiceLocalizer) FormatError(errorType string, args ...any) string {
 	template := sl.GetError(errorType)
 	if len(args) > 0 {
 		return fmt.Sprintf(template, args...)

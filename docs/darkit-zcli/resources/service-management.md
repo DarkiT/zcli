@@ -1,6 +1,6 @@
 # 服务管理和并发控制指南
 
-> 最近更新（2025-12-11）：✅ 统一迁移至 `ServiceRunner`，移除 `ConcurrentServiceManager`；✅ 信号处理改用 `RunWait` + `sm.Stop()`；✅ 错误消息示例全部英文化；⚠️ 请确保示例运行在 Go 1.23+。
+> 最近更新（2026-06-16）：`ManagedService` 正常取消归一为成功退出；停止钩子在并发关闭路径只执行一次；官方 examples E2E 已覆盖 Ctrl+C 不打印 `Usage:` / `context canceled`。
 
 ## 概述
 
@@ -177,56 +177,15 @@ func (l *AppLifecycle) AfterStop() error {
 }
 ```
 
-## 状态管理
+## 运行状态边界
 
-### ServiceState 状态定义
+当前主线不公开独立的 `ServiceState` / `AddStateListener` API。运行状态由以下来源判定：
 
-```go
-type ServiceState int32
+- CLI 前台模式：`Run(ctx)` 返回值和进程退出码
+- 系统服务模式：底层 `github.com/darkit/daemon` 的 `Status()`
+- 业务内部：服务实现自行维护健康状态或暴露 `health` 命令
 
-const (
-    StateStopped  ServiceState = iota  // 0: 已停止
-    StateStarting                      // 1: 启动中
-    StateRunning                       // 2: 运行中
-    StateStopping                      // 3: 停止中
-    StateError                         // 4: 错误状态
-)
-```
-
-### 状态转换规则
-
-```
-StateStopped(已停止)
-    ↓ Start()
-StateStarting(启动中)
-    ↓ 启动成功
-StateRunning(运行中)
-    ↓ Stop()
-StateStopping(停止中)
-    ↓ 停止完成
-StateStopped(已停止)
-
-任何状态 --错误--> StateError(错误)
-```
-
-### 状态监听器
-
-```go
-manager.AddStateListener(func(oldState, newState zcli.ServiceState) {
-    slog.Info("状态变更",
-        "old", oldState,
-        "new", newState)
-
-    switch newState {
-    case zcli.StateRunning:
-        sendNotification("服务已启动")
-    case zcli.StateError:
-        triggerAlert("服务进入错误状态")
-    case zcli.StateStopped:
-        slog.Info("服务已完全停止")
-    }
-})
-```
+框架内部使用原子状态保护重复运行、重复停止和后台强制退出；这些状态不作为公开 API 承诺。
 
 ## 信号处理（RunWait 机制）
 
@@ -260,7 +219,7 @@ func runService(ctx context.Context) error {
     for {
         select {
         case <-ctx.Done():
-            return ctx.Err()
+            return nil
         case sig := <-sigChan:
             switch sig {
             case syscall.SIGHUP:
@@ -278,14 +237,19 @@ func runService(ctx context.Context) error {
 ### 优雅关闭流程
 
 ```
-1. 收到关闭信号
-2. 停止接受新请求
-3. 等待现有请求完成
-4. 保存应用状态
-5. 关闭数据库连接
-6. 关闭其他资源
-7. 退出程序
+RunWait 捕获 SIGINT/SIGTERM/SIGQUIT
+    ↓
+sm.Stop() 取消传给用户 Run(ctx) 的 context
+    ↓
+Run(ctx) 收到 ctx.Done() 并返回 nil
+    ↓
+必要时执行 Stop() / 生命周期停止钩子
+    ↓
+Execute 返回 nil，进程以 0 退出
 ```
+
+正常关闭不应向 Cobra 返回 `context.Canceled`，否则 Cobra 会按命令错误打印 `Error:` 和 `Usage:`。
+`ManagedService` 会把 `context.Canceled`、`context.DeadlineExceeded` 和 `ShutdownCause` 归一为成功关闭，并保证 `BeforeStop` / `Stop` / `AfterStop` 在并发关闭路径只执行一次。
 
 ### HTTP 服务优雅关闭
 
@@ -327,7 +291,7 @@ RunWait 捕获信号 → sm.Stop()
     ↓
 [超时] 再等待 5 秒（清理期）
     ↓
-[超时] 强制终止进程（总计不超过 15s）
+[超时] 后台模式复用 StopTimeout（默认 20s）触发强制退出保护
 ```
 
 ### 自定义超时
@@ -389,7 +353,7 @@ func (s *MyService) Stop() error {
 for {
     select {
     case <-ctx.Done():
-        return ctx.Err()
+        return nil
     case work := <-workChan:
         process(work)
     }

@@ -347,7 +347,8 @@ func NewLoggingErrorHandler(logger Logger) *LoggingErrorHandler {
 // HandleError 处理错误
 func (leh *LoggingErrorHandler) HandleError(err error) error {
 	if serviceErr, ok := err.(*ServiceError); ok {
-		leh.logger.Error("Service error",
+		leh.logger.Error(
+			"Service error",
 			"code", serviceErr.Code,
 			"service", serviceErr.Service,
 			"operation", serviceErr.Operation,

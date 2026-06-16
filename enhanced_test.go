@@ -3,6 +3,7 @@ package zcli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,7 +147,7 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 					Run: func(cmd *Command, args []string) {},
 				}).
 				WithName("hook-app").
-				WithInitHook(func(cmd *cobra.Command, args []string) error {
+				WithInitHook(func(cmd *Command, args []string) error {
 					hookCalled.Store(true)
 					return nil
 				}).
@@ -240,6 +241,56 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("公开类型词汇保持 zcli 兼容身份", func(t *testing.T) {
+		var hook InitHook = func(cmd *Command, args []string) error { return nil }
+		if hook == nil {
+			t.Fatal("InitHook 应使用 zcli.Command 词汇并可正常赋值")
+		}
+
+		completion := func(cmd *Command, args []string, toComplete string) ([]Completion, ShellCompDirective) {
+			return []Completion{CompletionWithDesc("prod", "production profile")}, ShellCompDirectiveNoFileComp
+		}
+
+		app := NewBuilder("zh").
+			WithName("completion-app").
+			WithCommand(&Command{Use: "inspect"}).
+			Build()
+
+		if err := app.RegisterFlagCompletionFunc("profile", completion); err == nil {
+			t.Fatal("未定义的 flag 注册补全应失败，用于证明调用已命中原生 Cobra 路径")
+		}
+
+		got, ok := app.GetFlagCompletionFunc("profile")
+		if ok {
+			t.Fatal("未定义的 flag 不应返回补全函数")
+		}
+		if got != nil {
+			t.Fatal("未命中时补全函数应为 nil")
+		}
+
+		raw := app.Command()
+		if raw == nil {
+			t.Fatal("Command() 应返回根命令")
+		}
+		raw.PersistentFlags().String("profile", "dev", "runtime profile")
+		if err := app.RegisterFlagCompletionFunc("profile", completion); err != nil {
+			t.Fatalf("注册补全失败: %v", err)
+		}
+
+		got, ok = app.GetFlagCompletionFunc("profile")
+		if !ok || got == nil {
+			t.Fatal("已注册的 flag 补全函数应可取回")
+		}
+
+		items, directive := got(raw, nil, "pr")
+		if directive != ShellCompDirectiveNoFileComp {
+			t.Fatalf("期望 directive 为 NoFileComp，实际为 %v", directive)
+		}
+		if len(items) != 1 || items[0] != "prod\tproduction profile" {
+			t.Fatalf("期望 completion 保留 Cobra 语义，实际为 %#v", items)
+		}
+	})
+
 	t.Run("便利性API", func(t *testing.T) {
 		// 测试QuickService
 		cli := QuickService("quick-test", "快速测试服务", func(ctx context.Context) error {
@@ -255,6 +306,72 @@ func TestEnhancedBuilderAPI(t *testing.T) {
 
 		if cliTool.Name() != "cli-tool" {
 			t.Errorf("期望工具名称为 'cli-tool'，实际为 '%s'", cliTool.Name())
+		}
+	})
+
+	t.Run("NewCommand 保持 alias-first sugar 语义", func(t *testing.T) {
+		var ran atomic.Bool
+
+		cmd := NewCommand(
+			"inspect [target]",
+			"Inspect a target",
+			WithCommandAliases("show"),
+			WithCommandLong("Inspect a target with additive zcli sugar."),
+			WithCommandExample("inspect service-a"),
+			WithCommandArgs(ExactArgs(1)),
+			WithCommandValidArgs("service-a", "service-b"),
+			WithCommandRun(func(cmd *Command, args []string) {
+				ran.Store(true)
+			}),
+			WithCommandFlags(func(flags *FlagSet) {
+				flags.Bool("verbose", false, "Enable verbose output")
+			}),
+		)
+
+		if cmd.Use != "inspect [target]" {
+			t.Fatalf("期望 Use 被写入，实际为 %q", cmd.Use)
+		}
+		if len(cmd.Aliases) != 1 || cmd.Aliases[0] != "show" {
+			t.Fatalf("期望 aliases 被写入，实际为 %#v", cmd.Aliases)
+		}
+		if cmd.Long == "" || cmd.Example == "" {
+			t.Fatal("期望 long/example 被写入")
+		}
+		if !cmd.Flags().HasFlags() {
+			t.Fatal("期望 command flags 已配置")
+		}
+		if len(cmd.ValidArgs) != 2 {
+			t.Fatalf("期望有效参数被写入，实际为 %#v", cmd.ValidArgs)
+		}
+
+		cmd.Run(cmd, []string{"service-a"})
+		if !ran.Load() {
+			t.Fatal("期望 Run 回调被触发")
+		}
+	})
+
+	t.Run("NewFlagSet 与 completion 总入口保持 zcli 词汇", func(t *testing.T) {
+		flags := NewFlagSet("demo")
+		flags.String("profile", "dev", "Runtime profile")
+		if !flags.HasFlags() {
+			t.Fatal("期望 NewFlagSet 返回可用的标志集合")
+		}
+
+		app := NewBuilder("zh").
+			WithName("completion-api").
+			WithCommand(NewCommand("inspect", "inspect target")).
+			Build()
+
+		var bashOut strings.Builder
+		if err := app.GenCompletion(CompletionShellBash, &bashOut, true); err != nil {
+			t.Fatalf("生成 bash completion 失败: %v", err)
+		}
+		if bashOut.Len() == 0 {
+			t.Fatal("期望生成非空 bash completion")
+		}
+
+		if err := app.GenCompletion("unknown-shell", &strings.Builder{}, false); err == nil {
+			t.Fatal("未知 shell 应返回错误")
 		}
 	})
 }
@@ -281,7 +398,8 @@ func TestServiceInterface(t *testing.T) {
 		var runCalled atomic.Bool
 		var stopCalled atomic.Bool
 
-		service := NewSimpleService("test-service",
+		service := NewSimpleService(
+			"test-service",
 			func(ctx context.Context) error {
 				runCalled.Store(true)
 				// 等待上下文被取消

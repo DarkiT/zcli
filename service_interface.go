@@ -344,6 +344,9 @@ type ServiceLifecycle interface {
 type ManagedService struct {
 	ServiceRunner
 	lifecycle ServiceLifecycle
+	stopMu    sync.Mutex
+	stopOnce  *sync.Once
+	stopErr   error
 }
 
 // NewManagedService 创建带生命周期管理的服务
@@ -356,6 +359,8 @@ func NewManagedService(runner ServiceRunner, lifecycle ServiceLifecycle) *Manage
 
 // Run 运行带生命周期管理的服务
 func (ms *ManagedService) Run(ctx context.Context) error {
+	ms.resetStopState()
+
 	// 启动前处理
 	if ms.lifecycle != nil {
 		if err := ms.lifecycle.BeforeStart(); err != nil {
@@ -389,36 +394,84 @@ func (ms *ManagedService) Run(ctx context.Context) error {
 	// 等待服务结束或上下文取消
 	select {
 	case err := <-errChan:
+		if isExpectedShutdownError(err) && ctx.Err() != nil {
+			return nil
+		}
 		return err
 	case <-ctx.Done():
 		var errs []error
 
-		// 停止前处理
+		if err := ms.Stop(); err != nil {
+			errs = append(errs, err)
+		}
+		if runErr := <-errChan; runErr != nil && !isExpectedShutdownError(runErr) {
+			errs = append(errs, runErr)
+		}
+
+		if len(errs) > 0 {
+			return CombineErrors(errs...)
+		}
+		return nil
+	}
+}
+
+// Stop 停止带生命周期管理的服务。
+// 生命周期停止钩子和底层 Stop 在并发关闭路径中只执行一次，避免 Ctrl+C
+// 同时触发 service manager 与 ManagedService 时重复清理。
+func (ms *ManagedService) Stop() error {
+	ms.stopMu.Lock()
+	if ms.stopOnce == nil {
+		ms.stopOnce = &sync.Once{}
+	}
+	once := ms.stopOnce
+	ms.stopMu.Unlock()
+
+	once.Do(func() {
+		var errs []error
+
 		if ms.lifecycle != nil {
 			if err := ms.lifecycle.BeforeStop(); err != nil {
 				errs = append(errs, fmt.Errorf("BeforeStop: %w", err))
 			}
 		}
 
-		// 停止服务
-		if err := ms.Stop(); err != nil {
-			errs = append(errs, fmt.Errorf("stop failed: %w", err))
+		if ms.ServiceRunner != nil {
+			if err := ms.ServiceRunner.Stop(); err != nil {
+				errs = append(errs, fmt.Errorf("stop failed: %w", err))
+			}
 		}
 
-		// 停止后处理
 		if ms.lifecycle != nil {
 			if err := ms.lifecycle.AfterStop(); err != nil {
 				errs = append(errs, fmt.Errorf("AfterStop: %w", err))
 			}
 		}
 
-		if runErr := <-errChan; runErr != nil && !errors.Is(runErr, context.Canceled) {
-			errs = append(errs, runErr)
-		}
+		ms.stopMu.Lock()
+		ms.stopErr = CombineErrors(errs...)
+		ms.stopMu.Unlock()
+	})
 
-		errs = append(errs, ctx.Err())
-		return CombineErrors(errs...)
+	ms.stopMu.Lock()
+	defer ms.stopMu.Unlock()
+	return ms.stopErr
+}
+
+func isExpectedShutdownError(err error) bool {
+	if err == nil {
+		return true
 	}
+	var shutdownCause *ShutdownCause
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.As(err, &shutdownCause)
+}
+
+func (ms *ManagedService) resetStopState() {
+	ms.stopMu.Lock()
+	defer ms.stopMu.Unlock()
+	ms.stopOnce = &sync.Once{}
+	ms.stopErr = nil
 }
 
 // =============================================================================

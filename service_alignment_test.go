@@ -116,6 +116,33 @@ func TestBuildRunner_StopInvokesUserStop(t *testing.T) {
 	}
 }
 
+func TestNewServiceAssemblyManagerBuildsManagerWithoutInjectingCommands(t *testing.T) {
+	config := NewConfig()
+	config.basic.Name = "service-assembly"
+	config.runtime.Run = func(ctx context.Context) error {
+		<-ctx.Done()
+		return nil
+	}
+
+	cli := &Cli{
+		config:  config,
+		colors:  newColors(),
+		lang:    GetLanguageManager().GetPrimary(),
+		command: &Command{Use: config.basic.Name},
+	}
+
+	sm, err := cli.newServiceAssemblyManager()
+	if err != nil {
+		t.Fatalf("newServiceAssemblyManager: %v", err)
+	}
+	if sm == nil {
+		t.Fatal("expected service manager to be created")
+	}
+	if len(cli.command.Commands()) != 0 {
+		t.Fatal("newServiceAssemblyManager should not inject commands by itself")
+	}
+}
+
 func TestBaseService_CanRestartAfterStop(t *testing.T) {
 	svc, err := NewBaseService(ServiceConfig{Name: "base-service"})
 	if err != nil {
@@ -214,6 +241,111 @@ func (r *runnerWrapper) Stop() error {
 }
 
 func (r *runnerWrapper) Name() string { return "managed" }
+
+func TestManagedService_GracefulCancelIsNilAndStopOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runner := &runnerWrapper{runDone: make(chan struct{})}
+	lifecycle := &countingLifecycle{afterStart: make(chan struct{}, 1)}
+	managed := NewManagedService(runner, lifecycle)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- managed.Run(ctx)
+	}()
+
+	select {
+	case <-lifecycle.afterStart:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("managed service did not start")
+	}
+
+	cancel()
+	if err := managed.Stop(); err != nil {
+		t.Fatalf("manual Stop during cancellation should be nil: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("graceful context cancellation should return nil, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("managed service did not stop")
+	}
+
+	if got := lifecycle.beforeStop.Load(); got != 1 {
+		t.Fatalf("BeforeStop should run once, got %d", got)
+	}
+	if got := lifecycle.afterStop.Load(); got != 1 {
+		t.Fatalf("AfterStop should run once, got %d", got)
+	}
+	if !runner.stopCalled.Load() {
+		t.Fatal("expected runner Stop to be called")
+	}
+}
+
+func TestManagedService_CanRestartWithLifecycleAfterStop(t *testing.T) {
+	lifecycle := &countingLifecycle{afterStart: make(chan struct{}, 2)}
+	managed := NewManagedService(&runnerWrapper{}, lifecycle)
+
+	for i := range 2 {
+		ctx, cancel := context.WithCancel(context.Background())
+		managed.ServiceRunner = &runnerWrapper{runDone: make(chan struct{})}
+
+		done := make(chan error, 1)
+		go func() {
+			done <- managed.Run(ctx)
+		}()
+
+		select {
+		case <-lifecycle.afterStart:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("managed service did not start on run %d", i+1)
+		}
+
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("run %d returned error: %v", i+1, err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("managed service did not stop on run %d", i+1)
+		}
+	}
+
+	if got := lifecycle.beforeStop.Load(); got != 2 {
+		t.Fatalf("BeforeStop should run once per run, got %d", got)
+	}
+	if got := lifecycle.afterStop.Load(); got != 2 {
+		t.Fatalf("AfterStop should run once per run, got %d", got)
+	}
+}
+
+type countingLifecycle struct {
+	beforeStop atomic.Int32
+	afterStop  atomic.Int32
+	afterStart chan struct{}
+}
+
+func (l *countingLifecycle) BeforeStart() error { return nil }
+
+func (l *countingLifecycle) AfterStart() error {
+	l.afterStart <- struct{}{}
+	return nil
+}
+
+func (l *countingLifecycle) BeforeStop() error {
+	l.beforeStop.Add(1)
+	return nil
+}
+
+func (l *countingLifecycle) AfterStop() error {
+	l.afterStop.Add(1)
+	return nil
+}
 
 func waitForRunning(t *testing.T, svc *BaseService) {
 	t.Helper()

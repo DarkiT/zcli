@@ -1,6 +1,7 @@
 package zcli
 
 import (
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -80,6 +81,55 @@ func TestUninstallCommand_NotInstalledIsIdempotent(t *testing.T) {
 	}
 	if stub.uninstallCalled != 0 {
 		t.Fatalf("expected uninstall to be skipped when service is absent, got %d call(s)", stub.uninstallCalled)
+	}
+}
+
+func TestAttachServiceAssemblyInjectsCommandsAndPreservesRootFallback(t *testing.T) {
+	config := NewConfig()
+	config.basic.Name = "attach-service"
+	config.runtime.Run = func(ctx context.Context) error { <-ctx.Done(); return nil }
+
+	rootRunCalled := false
+	cli := &Cli{
+		config:  config,
+		colors:  newColors(),
+		lang:    GetLanguageManager().GetPrimary(),
+		command: &Command{Use: config.basic.Name},
+	}
+	cli.command.Run = func(cmd *Command, args []string) {
+		rootRunCalled = true
+	}
+
+	stub := &fakeDaemonService{}
+	localizer := NewServiceLocalizer(GetLanguageManager(), cli.colors)
+	localizer.ConfigureOutput(io.Discard, io.Discard, false, false)
+	sm := &sManager{
+		commands:  cli,
+		localizer: localizer,
+		service:   stub,
+	}
+
+	cli.attachServiceAssembly(sm)
+
+	for _, name := range []string{"run", "install", "uninstall", "start", "stop", "restart", "status"} {
+		cmd, _, err := cli.command.Find([]string{name})
+		if err != nil || cmd == nil || cmd.Name() != name {
+			t.Fatalf("expected service command %q to be injected, cmd=%v err=%v", name, cmd, err)
+		}
+	}
+
+	if cli.command.Run != nil {
+		t.Fatal("root Run should be cleared after service root run strategy is attached")
+	}
+	if cli.command.RunE == nil {
+		t.Fatal("root RunE should be attached for service fallback")
+	}
+
+	if err := cli.command.RunE(cli.command, []string{"arg"}); err != nil {
+		t.Fatalf("expected original root Run fallback to remain usable, got %v", err)
+	}
+	if !rootRunCalled {
+		t.Fatal("expected original root Run to remain reachable through service root strategy")
 	}
 }
 

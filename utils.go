@@ -40,17 +40,23 @@ func wordWrap(text string, width int) string {
 
 // getCommandPath 获取完整的命令路径
 func getCommandPath(cc *cobra.Command) string {
+	// 直接使用 Cobra 的 CommandPath 方法
+	// 这会返回完整的命令路径，如 "z-ai proxy client start"
+	path := cc.CommandPath()
+	if path != "" {
+		return path
+	}
+
+	// 回退方案：手动构建命令路径
 	base := filepath.Base(os.Args[0])
 	if cc.Name() == "" {
 		return base
 	}
-	// 如果是子命令且有父命令
 	if cc.Parent() != nil {
-		// 返回 "可执行文件名 子命令名"
-		return fmt.Sprintf("%s %s", base, cc.Name())
+		return fmt.Sprintf("%s %s", getCommandPath(cc.Parent()), cc.Name())
 	}
 
-	return cc.CommandPath()
+	return base
 }
 
 // ============================================================================

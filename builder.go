@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 // Builder CLI构建器 - 增强版
@@ -23,7 +22,7 @@ type Builder struct {
 
 // InitHook 在命令执行前执行的初始化钩子
 // 返回 error 则中断命令执行
-type InitHook func(cmd *cobra.Command, args []string) error
+type InitHook func(cmd *Command, args []string) error
 
 // NewBuilder 创建CLI构建器
 // lang参数可选，指定默认语言
@@ -258,9 +257,7 @@ func (b *Builder) WithServiceOptionsMap(options ServiceOptions) *Builder {
 	if b.config.service.Options == nil {
 		b.config.service.Options = make(ServiceOptions)
 	}
-	for key, value := range options {
-		b.config.service.Options[key] = value
-	}
+	maps.Copy(b.config.service.Options, options)
 	return b
 }
 
@@ -397,15 +394,11 @@ func (b *Builder) BuildWithError() (*Cli, error) {
 
 func (b *Builder) finalizeCLI() *Cli {
 	if b.cli == nil {
-		b.cli = NewCli(WithConfig(b.config))
+		b.cli = newAppBase(b.config)
 	}
-	if len(b.pendingCmds) > 0 {
-		b.cli.AddCommand(b.pendingCmds...)
-		b.pendingCmds = nil
-	}
-	if len(b.initHooks) > 0 {
-		b.attachInitHooks(b.cli.Command())
-	}
+	b.cli.applyBuilderAssembly(b.pendingCmds, b.initHooks)
+	b.pendingCmds = nil
+	b.initHooks = nil
 	return b.cli
 }
 
@@ -437,30 +430,6 @@ func (b *Builder) validate() error {
 	}
 
 	return nil
-}
-
-func (b *Builder) attachInitHooks(root *cobra.Command) {
-	if root == nil {
-		return
-	}
-	if len(b.initHooks) == 0 {
-		return
-	}
-
-	prev := root.PersistentPreRunE
-	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		if prev != nil {
-			if err := prev(cmd, args); err != nil {
-				return err
-			}
-		}
-		for _, hook := range b.initHooks {
-			if err := hook(cmd, args); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 }
 
 // BuildError 构建错误

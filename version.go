@@ -66,7 +66,7 @@ func (vi *VersionInfo) String() string {
 	}
 	fields := []struct {
 		name  string
-		value interface{}
+		value any
 		cond  bool
 	}{
 		// 核心标识（用户最关心）

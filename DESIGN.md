@@ -1,6 +1,6 @@
 # zcli DESIGN
 
-> 设计说明与关键决策的正式记录。
+> 设计说明与关键决策的正式记录。更细的审计细节见 `docs/darkit-zcli/resources/design-audit-2026-03.md`，兼容契约见 `docs/darkit-zcli/resources/cobra-fusion-contract.md`。
 
 ## 模块定位
 
@@ -9,6 +9,21 @@
 1. **Builder 组装**：把基础信息、命令树、service runtime、hooks、error handlers 组合为一致的 `Cli`
 2. **Service 生命周期**：统一前台运行、系统服务安装/启动/停止、`RunWait` 优雅退出与超时处理
 3. **I18n / UI 输出**：提供层次化语言包、service 本地化输出、help/version 等 UI 文案支撑
+
+## Cobra 融合契约
+
+当前主线采用 **alias-first compatibility core + additive ergonomic layer**：
+
+1. **兼容内核**：`Command` / `FlagSet` / `Flag` 继续直接对齐 Cobra / pflag 真相源，避免维护一套难以追平的全量 wrapper。
+2. **增强装配**：`Builder`、help/version/UI、service commands、init hooks、error handlers 通过 `Cli` / root command 的装配流程植入。
+3. **优雅糖层**：允许继续增加 `App` 语义、`NewCommand()` 等 DX 能力，但只能做加法，不能替代兼容内核。
+4. **原生逃生口**：高级调用方仍然需要能够访问底层 Cobra 能力，不能为了“纯 zcli 表面”把 escape hatch 封死。
+
+明确拒绝的方向：
+
+- 直接把 `develop` 分支的全量 wrapper 重写当作主线方案
+- 为了文档表面整洁而牺牲 Cobra 兼容面
+- 在没有验证的前提下承诺低于源码真实要求的 Go 版本支持
 
 ## 当前结构
 
@@ -35,7 +50,7 @@
 ### Repo 文档
 
 - `README.md`：外部使用入口与 API 示例
-- `examples/README.md`：官方示例入口与目录说明
+- `docs/darkit-zcli/resources/design-audit-2026-03.md`：设计审计与边界问题详细记录
 
 ## 核心设计决策
 
@@ -78,7 +93,7 @@
 
 ### 6. 大文件按职责拆分，而不是按“工具函数”碎片化
 
-当前拆分遵循“低风险 + 低心智负担”：
+本轮拆分遵循“低风险 + 低心智负担”：
 
 - `service.go` 保留 manager 核心状态与生命周期主链
 - `service_commands.go` 独立承接命令装配与命令工厂
@@ -87,30 +102,39 @@
 
 **原因**：优先压低文件体积与复杂度，同时避免过度抽象导致阅读跳转过多。
 
-## 兼容性与实现约束
+### 7. 文档叙事必须服从源码真相
+
+- 对外主路径可以优先讲 `zcli` 词汇，但不能伪造当前尚未实现的公开签名
+- README / examples / resources 对 Go 版本的承诺，必须以 `go.mod` 与验证结果为准
+- `develop` 分支中的实验性重构，只能作为参考资产，不得被文档误写成既成事实
+
+**原因**：公共 CLI 框架最怕“代码能跑、文档误导、升级踩坑”；文档漂移本身就是兼容性风险。
+
+## 已确认并修复的边界问题
 
 ### Builder / Config
 
-- `WithCommand()` 延迟收集命令，避免 Builder 在链式配置完成前被冻结
-- `BuildWithError()` 负责统一附加 init hooks，并以错误返回承载构建期失败
-- `WithConfig()` 深拷贝 runtime 时保留 `ErrorHandlers`，避免覆盖已有错误处理链
+- `WithCommand()` 提前触发构建，导致 Builder 冻结过早
+- `BuildWithError()` 曾漏挂 init hooks
+- `WithConfig()` 深拷贝 runtime 时曾丢失 `ErrorHandlers`
 
 ### Service
 
-- `executeRunCommand()` 必须把 `service.Run()` 错误回传给调用方
-- `waitForServiceCompletion()` 必须消费并返回运行期错误
-- 同一 `sManager` 重复运行时，`stopOnce` / `stopFuncOnce` 等停止状态必须在新一轮运行前复位
+- `executeRunCommand()` 曾吞掉 `service.Run()` 错误
+- `waitForServiceCompletion()` 曾无法把运行错误回传给调用方
+- 同一 `sManager` 重复运行时，`stopOnce` / `stopFuncOnce` 曾不复位
 
 ### API / 全局状态
 
-- `WithServiceRunner(nil)` 在构建阶段返回错误，而不是配置期 panic
-- `WithMousetrapDisabled(true)` 仅在执行期临时调整 Cobra 全局展示行为，并在执行结束后恢复
+- `WithServiceRunner(nil)` 曾立即 panic
+- `WithMousetrapDisabled(true)` 曾直接污染全局 `MousetrapHelpText`
 
 ## 仍保留的边界约束
 
 1. `Build()` / `MustBuild()` 仍是 panic 语义，适合应用层，不适合不确定配置路径
 2. Cobra 仍有少量全局模型；当前已做执行期隔离，但不承诺高并发多 CLI 实例完全无共享副作用
 3. `ServiceLocalizer` 与 `sManager` 仍紧耦合，这是有意为之：service 子系统优先追求一致日志/错误体验，而非过早抽象
+4. `go.mod` 当前声明 `go 1.25.0`；在重新验证前，不应继续把 README 中的 `Go 1.23+` 当作正式兼容承诺
 
 ## 测试与验证策略
 
@@ -130,3 +154,27 @@ go test ./...
 node /opt/work/data/codex/skills/tools/verify-change/scripts/change_analyzer.js .
 node /opt/work/data/codex/skills/tools/verify-quality/scripts/quality_checker.js .
 ```
+
+## 变更历史
+
+### 2026-03-07 - 生命周期与大文件拆分收口
+
+**变更内容**
+
+- 修复 Builder 生命周期、service error propagation、重复运行边界、Mousetrap 全局污染
+- 将 service 拆为核心/commands/support 三个文件
+- 将 i18n 按模型/manager/localizer/builtin 四层拆分，内置语言包与全局语言访问入口移至 `i18n_builtin.go`
+- 新增正式 `DESIGN.md`，沉淀设计决策与边界约束
+
+**变更理由**
+
+- 收敛设计级缺陷
+- 降低超长文件带来的维护成本
+- 让 README、实现、审计文档三者口径一致
+
+**影响范围**
+
+- Builder 生命周期
+- service runtime / command 装配
+- i18n 内置语言组织方式
+- repo 文档与设计记录

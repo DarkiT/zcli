@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -25,8 +24,28 @@ var systemCmdOrder = map[string]int{
 	"uninstall": 7,
 }
 
-// addRootCommand 在初始化时设置语言包
-func (c *Cli) addRootCommand(rootCmd *cobra.Command) {
+// applyBuilderAssembly 统一收束 Builder 到 App/Cli 的装配顺序。
+// 顺序固定为：版本/基础 root → help/UI → init hooks → service commands。
+func (c *Cli) applyBuilderAssembly(pendingCmds []*Command, initHooks []InitHook) {
+	root := c.Command()
+	if root == nil {
+		return
+	}
+
+	if len(pendingCmds) > 0 {
+		c.AddCommand(pendingCmds...)
+	}
+
+	c.configureRootCommand(root)
+	c.attachInitHooks(root, initHooks)
+	c.setupService()
+}
+
+// configureRootCommand 为根命令注入 help/UI/completion 等装配能力。
+func (c *Cli) configureRootCommand(rootCmd *Command) {
+	if rootCmd == nil {
+		return
+	}
 	c.addHelpCommand(rootCmd)
 
 	// 设置控制台颜色支持
@@ -37,18 +56,45 @@ func (c *Cli) addRootCommand(rootCmd *cobra.Command) {
 	// 禁用默认的 completion 命令
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
-	// 使用UI渲染器
+	// 使用 UI 渲染器覆盖帮助展示
 	renderer := newUIRenderer(c)
 	rootCmd.SetHelpFunc(renderer.renderHelp)
 }
 
-func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
+// addRootCommand 兼容旧装配调用，内部统一转向新的 root command 配置入口。
+func (c *Cli) addRootCommand(rootCmd *Command) {
+	c.configureRootCommand(rootCmd)
+}
+
+// attachInitHooks 将 Builder 注册的 init hooks 统一附着到 root command。
+func (c *Cli) attachInitHooks(root *Command, hooks []InitHook) {
+	if root == nil || len(hooks) == 0 {
+		return
+	}
+
+	prev := root.PersistentPreRunE
+	root.PersistentPreRunE = func(cmd *Command, args []string) error {
+		if prev != nil {
+			if err := prev(cmd, args); err != nil {
+				return err
+			}
+		}
+		for _, hook := range hooks {
+			if err := hook(cmd, args); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func (c *Cli) addHelpCommand(rootCmd *Command) {
 	// 创建自定义帮助命令
-	helpCmd := &cobra.Command{
+	helpCmd := &Command{
 		Use:   "help",
 		Short: c.lang.UI.Help.Command,
 		Long:  c.lang.UI.Help.Description,
-		RunE: func(cc *cobra.Command, args []string) error {
+		RunE: func(cc *Command, args []string) error {
 			if len(args) == 0 {
 				// 如果没有参数，显示根命令的帮助
 				return rootCmd.Help()
@@ -75,13 +121,13 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 			return cmd.Help()
 		},
 		// 添加命令补全功能
-		ValidArgsFunction: func(cc *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		ValidArgsFunction: func(cc *Command, args []string, toComplete string) ([]Completion, ShellCompDirective) {
 			var completions []string
 
 			// 获取当前路径的命令
 			cmd, _, e := cc.Root().Find(args)
 			if e != nil {
-				return nil, cobra.ShellCompDirectiveNoFileComp
+				return nil, ShellCompDirectiveNoFileComp
 			}
 			if cmd == nil {
 				cmd = cc.Root()
@@ -97,7 +143,7 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 				}
 			}
 
-			return completions, cobra.ShellCompDirectiveNoFileComp
+			return completions, ShellCompDirectiveNoFileComp
 		},
 	}
 
@@ -111,14 +157,14 @@ func (c *Cli) addHelpCommand(rootCmd *cobra.Command) {
 	rootCmd.SetHelpCommand(helpCmd)
 
 	// 设置帮助函数
-	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+	rootCmd.SetHelpFunc(func(cmd *Command, args []string) {
 		// 如果是帮助命令本身，使用默认帮助
 		if cmd.Name() == "help" {
 			_ = cmd.Usage()
 			return
 		}
 		// 否则使用自定义的帮助显示
-		c.addRootCommand(cmd)
+		c.configureRootCommand(cmd)
 	})
 }
 

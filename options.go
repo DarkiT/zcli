@@ -2,6 +2,7 @@ package zcli
 
 import (
 	"context"
+	"maps"
 	"time"
 )
 
@@ -216,15 +217,11 @@ func cloneService(src *ServiceConfig) ServiceConfig {
 	}
 	if src.EnvVars != nil {
 		dst.EnvVars = make(map[string]string, len(src.EnvVars))
-		for k, v := range src.EnvVars {
-			dst.EnvVars[k] = v
-		}
+		maps.Copy(dst.EnvVars, src.EnvVars)
 	}
 	if src.Options != nil {
 		dst.Options = make(ServiceOptions, len(src.Options))
-		for k, v := range src.Options {
-			dst.Options[k] = v
-		}
+		maps.Copy(dst.Options, src.Options)
 	}
 	return dst
 }

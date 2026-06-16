@@ -2,7 +2,7 @@
 
 ## 概述
 
-本指南提供一个生产级的完整 CLI 应用示例，展示 ZCli 框架的所有核心功能。
+本指南提供完整 CLI 应用写法。仓库内可直接运行的最新全能力示例以 `examples/complete/main.go` 为准；本文保留拆分文件版结构，便于理解模块边界。
 
 ## 项目结构
 
@@ -32,11 +32,7 @@ import (
     "sync"
     "time"
 
-    "github.com/darkit/sysconf"
     "github.com/darkit/zcli"
-    "github.com/spf13/cobra"
-    "github.com/spf13/pflag"
-    "github.com/spf13/viper"
 )
 
 var (
@@ -80,26 +76,17 @@ func main() {
         // 注意：使用 getter 方法访问 Config 字段
         WithValidator(validateConfig)
 
-    // 初始化钩子：在命令执行前完成 sysconf 绑定与加载（仅执行一次）
+    // 初始化钩子：在命令执行前完成配置绑定与加载（仅执行一次）
     var (
-        sysconfOnce sync.Once
-        sysconfErr  error
+        initOnce sync.Once
+        initErr  error
     )
-    appBuilder.WithInitHook(func(cmd *cobra.Command, args []string) error {
-        sysconfOnce.Do(func() {
-            _, sysconfErr = sysconf.New(
-                sysconf.WithPath("configs"),
-                sysconf.WithName("app"),
-                sysconf.WithEnv("MYAPP"),
-                sysconf.WithPFlagOptions(sysconf.PFlagOptions{
-                    FlagSets: []*pflag.FlagSet{
-                        cmd.Flags(), cmd.PersistentFlags(), cmd.InheritedFlags(),
-                    },
-                    OnlyChanged: true,
-                }),
-            )
+    appBuilder.WithInitHook(func(cmd *zcli.Command, args []string) error {
+        initOnce.Do(func() {
+            // 在这里绑定 app.ExportFlagsForViper() 到实际配置系统。
+            slog.Info("配置初始化完成", "command", cmd.CommandPath(), "args", args)
         })
-        return sysconfErr
+        return initErr
     })
 
     app, err := appBuilder.BuildWithError()
@@ -122,27 +109,12 @@ func main() {
 }
 
 func loadConfig() (*AppConfig, error) {
-    viper.SetConfigName("config")
-    viper.SetConfigType("yaml")
-    viper.AddConfigPath(".")
-    viper.AddConfigPath("./configs")
-
-    viper.SetEnvPrefix("MYAPP")
-    viper.AutomaticEnv()
-
-    if err := viper.ReadInConfig(); err != nil {
-        if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-            return nil, err
-        }
-        slog.Info("未找到配置文件，使用默认配置")
-    }
-
-    var cfg AppConfig
-    if err := viper.Unmarshal(&cfg); err != nil {
-        return nil, fmt.Errorf("解析配置失败: %w", err)
-    }
-
-    return &cfg, nil
+    return &AppConfig{
+        Version: "1.0.0",
+        Server: ServerConfig{Host: "0.0.0.0", Port: 8080},
+        Database: DBConfig{Host: "localhost", Port: 5432, Name: "myapp", User: "postgres"},
+        Logging: LogConfig{Level: "info", Format: "json"},
+    }, nil
 }
 
 func setupFlags(app *zcli.Cli) {
@@ -387,51 +359,44 @@ import (
     "fmt"
 
     "github.com/darkit/zcli"
-    "github.com/spf13/cobra"
 )
 
 func addCustomCommands(app *zcli.Cli, cfg *AppConfig) {
     // 配置命令
-    configCmd := &cobra.Command{
-        Use:   "config",
-        Short: "配置管理",
-    }
+    configCmd := zcli.NewCommand("config", "配置管理")
 
     configCmd.AddCommand(
-        &cobra.Command{
-            Use:   "show",
-            Short: "显示当前配置",
-            Run: func(cmd *cobra.Command, args []string) {
+        zcli.NewCommand(
+            "show",
+            "显示当前配置",
+            zcli.WithCommandRun(func(cmd *zcli.Command, args []string) {
                 fmt.Printf("服务器: %s:%d\n", cfg.Server.Host, cfg.Server.Port)
                 fmt.Printf("数据库: %s:%d\n", cfg.Database.Host, cfg.Database.Port)
                 fmt.Printf("日志级别: %s\n", cfg.Logging.Level)
-            },
-        },
+            }),
+        ),
     )
 
     // 数据库命令
-    dbCmd := &cobra.Command{
-        Use:   "db",
-        Short: "数据库管理",
-    }
+    dbCmd := zcli.NewCommand("db", "数据库管理")
 
     dbCmd.AddCommand(
-        &cobra.Command{
-            Use:   "migrate",
-            Short: "运行数据库迁移",
-            RunE: func(cmd *cobra.Command, args []string) error {
+        zcli.NewCommand(
+            "migrate",
+            "运行数据库迁移",
+            zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
                 fmt.Println("运行数据库迁移...")
                 return nil
-            },
-        },
-        &cobra.Command{
-            Use:   "reset",
-            Short: "重置数据库",
-            RunE: func(cmd *cobra.Command, args []string) error {
+            }),
+        ),
+        zcli.NewCommand(
+            "reset",
+            "重置数据库",
+            zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
                 fmt.Println("重置数据库...")
                 return nil
-            },
-        },
+            }),
+        ),
     )
 
     app.AddCommand(configCmd, dbCmd)
@@ -594,13 +559,17 @@ func validateConfig(cfg *zcli.Config) error {
 ```go
 func (s *Service) Run(ctx context.Context) error {
     select {
-    case <-ctx.Done():  // 框架在收到 SIGINT/SIGTERM 时触发
+    case <-ctx.Done():  // 框架在收到 SIGINT/SIGTERM 时触发；正常关闭不返回 context.Canceled
         return s.shutdown()
     case <-s.stopCh:
         return nil
     }
 }
 ```
+
+### Ctrl+C 输出约定
+
+服务前台运行时，Ctrl+C 属于正常关闭路径：`Execute()` 应返回 `nil`，不应打印 `Error:`、`Usage:`、`context canceled` 或命令失败日志。该行为由 `tests/e2e/examples_test.go` 覆盖。
 
 ### ServiceRunner 接口
 

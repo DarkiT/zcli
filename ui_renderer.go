@@ -210,8 +210,8 @@ func (r *uiRenderer) renderExamples(buf *strings.Builder, cc *cobra.Command) {
 	buf.WriteString(r.colors.ExamplesTitle.Sprintf("%s:", r.lang.UI.Commands.Examples))
 	buf.WriteString(separator)
 
-	examples := strings.Split(cc.Example, separator)
-	for _, example := range examples {
+	examples := strings.SplitSeq(cc.Example, separator)
+	for example := range examples {
 		if example = strings.TrimSpace(example); example != "" {
 			if strings.HasPrefix(example, "$ ") {
 				// 命令示例

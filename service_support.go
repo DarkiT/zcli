@@ -117,3 +117,14 @@ func (sm *sManager) handleError(err error) error {
 func (sm *sManager) wrapServiceError(err error, code ErrorCode, operation string) *ServiceError {
 	return WrapServiceOperationError(err, code, operation, sm.Name())
 }
+
+// closeExitChanIfNeeded 在需要时关闭 exit 通道，避免重复 close。
+func (sm *sManager) closeExitChanIfNeeded() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	select {
+	case <-sm.exitChan:
+	default:
+		close(sm.exitChan)
+	}
+}

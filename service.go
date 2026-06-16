@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,6 +50,14 @@ type sManager struct {
 	stopMu         sync.Mutex
 	runnerDone     chan struct{}
 	runnerErr      chan error
+}
+
+// newServiceAssemblyManager 为 Cli 装配 service 能力。
+// 它只负责把当前 CLI 的配置转换成 sManager，不负责命令注入或 root 运行策略。
+func (c *Cli) newServiceAssemblyManager() (*sManager, error) {
+	// 使用外部上下文，信号处理由 service.RunWait 负责
+	ctx, cancel := context.WithCancel(c.config.Context())
+	return newServiceManager(c, ctx, cancel)
 }
 
 // newServiceManager 创建服务管理器实例
@@ -236,9 +245,7 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 	}
 	if svcCfg.Options != nil {
 		config.Option = make(service.KeyValue, len(svcCfg.Options))
-		for key, value := range svcCfg.Options {
-			config.Option[key] = value
-		}
+		maps.Copy(config.Option, svcCfg.Options)
 	}
 
 	execPath := svcCfg.Executable
@@ -282,8 +289,6 @@ func cloneStringMap(src map[string]string) map[string]string {
 	}
 
 	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
+	maps.Copy(dst, src)
 	return dst
 }

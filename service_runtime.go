@@ -9,6 +9,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// managedRunState 封装 daemon / service mode 下的后台运行协程句柄。
+type managedRunState struct {
+	done  chan struct{}
+	errCh chan error
+}
+
 func (sm *sManager) startManagedRun() error {
 	sm.mu.Lock()
 	if sm.runnerDone != nil {
@@ -22,20 +28,17 @@ func (sm *sManager) startManagedRun() error {
 		}
 	}
 
-	done := make(chan struct{})
-	errCh := make(chan error, 1)
-	sm.runnerDone = done
-	sm.runnerErr = errCh
+	state := sm.resetManagedRunStateLocked()
 	sm.mu.Unlock()
 
 	go func() {
-		defer close(done)
+		defer close(state.done)
 		// daemon StartFunc receives a startup-scoped context that is cancelled
 		// as soon as Start returns, so the long-lived service runtime must not
 		// inherit it.
 		if err := sm.Run(nil); err != nil {
 			select {
-			case errCh <- err:
+			case state.errCh <- err:
 			default:
 			}
 		}
@@ -51,6 +54,14 @@ func (sm *sManager) stopManagedRun(ctx context.Context) error {
 	)
 	runErr := sm.waitManagedRun(ctx)
 	return CombineErrors(stopErr, runErr)
+}
+
+func (sm *sManager) resetManagedRunStateLocked() managedRunState {
+	done := make(chan struct{})
+	errCh := make(chan error, 1)
+	sm.runnerDone = done
+	sm.runnerErr = errCh
+	return managedRunState{done: done, errCh: errCh}
 }
 
 func (sm *sManager) waitManagedRun(ctx context.Context) error {
@@ -150,6 +161,9 @@ func (sm *sManager) Run(externalCtx context.Context) error {
 
 	if sm.commands.config.runtime.Run != nil {
 		if err := sm.commands.config.runtime.Run(runCtx); err != nil {
+			if isExpectedShutdownError(err) && runCtx.Err() != nil {
+				return nil
+			}
 			if session.commandCancel != nil {
 				session.commandCancel(err)
 			}
@@ -201,14 +215,7 @@ func (sm *sManager) stopWithCause(cause error, callUserStop bool) error {
 	if commandCancel != nil {
 		commandCancel(cause)
 	}
-
-	sm.mu.Lock()
-	select {
-	case <-sm.exitChan:
-	default:
-		close(sm.exitChan)
-	}
-	sm.mu.Unlock()
+	sm.closeExitChanIfNeeded()
 
 	var stopErr error
 	if callUserStop && !sm.stopFuncOnce.Swap(true) {
@@ -221,6 +228,21 @@ func (sm *sManager) stopWithCause(cause error, callUserStop bool) error {
 
 	sm.running.Store(false)
 	return stopErr
+}
+
+func (sm *sManager) rebuildServiceForRun(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+
+	sm.config.Arguments = args
+	svc, err := service.New(sm.buildRunner(), sm.config)
+	if err != nil {
+		sm.localizer.LogError("createService", err)
+		return WrapError(err, ErrServiceCreate, "run")
+	}
+	sm.service = svc
+	return nil
 }
 
 // executeRunCommand 执行运行命令，支持前台和服务模式
@@ -241,19 +263,13 @@ func (sm *sManager) executeRunCommand(_ *cobra.Command, args []string) error {
 	session := sm.newCommandSessionLocked()
 
 	// 如果有参数变化，重新创建服务实例
-	if len(serviceArgs) > 0 {
-		sm.config.Arguments = serviceArgs
-		svc, err := service.New(sm.buildRunner(), sm.config)
-		if err != nil {
-			// 避免泄漏新创建的上下文
-			if session.commandCancel != nil {
-				session.commandCancel(err)
-			}
-			sm.mu.Unlock()
-			sm.localizer.LogError("createService", err)
-			return WrapError(err, ErrServiceCreate, "run")
+	if err := sm.rebuildServiceForRun(serviceArgs); err != nil {
+		// 避免泄漏新创建的上下文
+		if session.commandCancel != nil {
+			session.commandCancel(err)
 		}
-		sm.service = svc
+		sm.mu.Unlock()
+		return err
 	}
 	sm.mu.Unlock()
 
@@ -315,15 +331,7 @@ func (sm *sManager) waitForServiceCompletion(commandCtx context.Context, runDone
 		// 收到取消信号，尝试优雅停止
 
 		// 如果是交互式模式，安全地关闭退出通道
-		sm.mu.Lock()
-		select {
-		case <-sm.exitChan:
-			// 通道已关闭，不需要操作
-		default:
-			// 安全地关闭退出通道，通知服务停止
-			close(sm.exitChan)
-		}
-		sm.mu.Unlock()
+		sm.closeExitChanIfNeeded()
 
 		// 使用超时机制等待服务退出
 		initialWait := sm.commands.config.runtime.ShutdownInitial

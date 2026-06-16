@@ -78,10 +78,10 @@ func main() {
 }
 
 func newInspectCommand(app *zcli.Cli) *zcli.Command {
-	return &zcli.Command{
-		Use:   "inspect",
-		Short: "Print the configured service metadata",
-		RunE: func(cmd *zcli.Command, args []string) error {
+	return zcli.NewCommand(
+		"inspect",
+		"Print the configured service metadata",
+		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			cfg := app.Config()
 			view := configView{
 				Name:            cfg.Basic().Name,
@@ -98,8 +98,8 @@ func newInspectCommand(app *zcli.Cli) *zcli.Command {
 			encoder := json.NewEncoder(cmd.OutOrStdout())
 			encoder.SetIndent("", "  ")
 			return encoder.Encode(view)
-		},
-	}
+		}),
+	)
 }
 
 func runAgent(ctx context.Context) error {

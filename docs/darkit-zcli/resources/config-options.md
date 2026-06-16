@@ -25,13 +25,16 @@ func (c *Config) Context() context.Context
 
 ```go
 type Basic struct {
-    Name        string  // 服务名称
-    DisplayName string  // 显示名称
-    Description string  // 服务描述
-    Version     string  // 版本
-    Logo        string  // Logo 文本
-    Language    string  // 使用语言 ("zh" 或 "en")
-    NoColor     bool    // 禁用彩色输出
+    Name              string // 服务名称
+    DisplayName       string // 显示名称
+    Description       string // 服务描述
+    Version           string // 版本
+    Logo              string // Logo 文本
+    Language          string // 使用语言
+    MousetrapDisabled bool   // 禁用 Windows 双击运行提示
+    NoColor           bool   // 禁用彩色输出
+    SilenceErrors     bool   // 禁止 Cobra 自动打印错误
+    SilenceUsage      bool   // 禁止 Cobra 自动打印用法
 }
 ```
 
@@ -55,18 +58,20 @@ func validateConfig(cfg *zcli.Config) error {
 
 ```go
 type ServiceConfig struct {
-    Name         string                 // 服务名称
-    DisplayName  string                 // 显示名称
-    Description  string                 // 服务描述
-    Version      string                 // 版本号
-    Username     string                 // 运行用户
-    Arguments    []string               // 启动参数
-    Executable   string                 // 可执行文件路径
-    Dependencies []string               // 服务依赖
-    WorkDir      string                 // 工作目录
-    ChRoot       string                 // 根目录
-    Options      map[string]interface{} // 自定义选项
-    EnvVars      map[string]string      // 环境变量
+    Name              string            // 服务名称
+    DisplayName       string            // 显示名称
+    Description       string            // 服务描述
+    Version           string            // 版本号
+    WorkDir           string            // 工作目录
+    Username          string            // 系统服务运行用户
+    Dependencies      []string          // daemon 原生字符串依赖
+    StructuredDeps    []Dependency      // daemon 结构化依赖
+    EnvVars           map[string]string // 环境变量
+    Arguments         []string          // 系统服务启动参数
+    Executable        string            // 可执行文件路径
+    ChRoot            string            // chroot 根目录
+    Options           ServiceOptions    // daemon 平台特定配置
+    AllowSudoFallback bool              // 是否允许 sudo/su 回退
 }
 ```
 
@@ -94,11 +99,14 @@ func validateServiceConfig(cfg *zcli.Config) error {
 
 ```go
 type Runtime struct {
-    Run             RunFunc       // 启动函数
-    Stop            StopFunc      // 停止函数
-    BuildInfo       *VersionInfo  // 构建信息
-    ShutdownInitial time.Duration // 取消 Run(ctx) 后的主服务退出时长（默认 15s）
-    ShutdownGrace   time.Duration // stop hook / 最终清理的额外时长（默认 5s）
+    Run             RunFunc        // 启动函数
+    Stop            StopFunc       // 停止函数
+    BuildInfo       *VersionInfo   // 构建信息
+    ShutdownInitial time.Duration  // 取消 Run(ctx) 后的主服务退出时长（默认 15s）
+    ShutdownGrace   time.Duration  // stop hook / 最终清理的额外时长（默认 5s）
+    StartTimeout    time.Duration  // daemon 启动超时
+    StopTimeout     time.Duration  // daemon 停止超时，默认 20s
+    ErrorHandlers   []ErrorHandler // 错误处理器链
 }
 ```
 
@@ -159,8 +167,18 @@ app, _ := zcli.NewBuilder("zh").
 | `WithServiceRunner(runner)` | 配置服务接口 | `.WithServiceRunner(myService)` |
 | `WithWorkDir(dir)` | 设置工作目录 | `.WithWorkDir("/opt/app")` |
 | `WithEnvVar(key, value)` | 添加环境变量 | `.WithEnvVar("ENV", "prod")` |
-| `WithDependencies(deps...)` | 设置服务依赖 | `.WithDependencies("postgresql")` |
-| `WithShutdownTimeouts(i, g)` | 设置关闭超时 | `.WithShutdownTimeouts(5*time.Second, 3*time.Second)` |
+| `WithServiceUser(username)` | 设置系统服务运行用户 | `.WithServiceUser("svc-app")` |
+| `WithExecutable(path)` | 设置系统服务可执行文件 | `.WithExecutable("/opt/app/bin/app")` |
+| `WithArguments(args...)` | 设置系统服务参数；空列表可清空默认 `run` | `.WithArguments("run", "--profile", "prod")` |
+| `WithChRoot(dir)` | 设置 chroot 根目录 | `.WithChRoot("/srv/jail")` |
+| `WithDependencies(deps...)` | 设置 require 型结构化依赖 | `.WithDependencies("postgresql")` |
+| `WithLegacyDependencies(deps...)` | 设置 daemon 原生字符串依赖 | `.WithLegacyDependencies("network.target")` |
+| `WithStructuredDependencies(deps...)` | 批量设置结构化依赖 | `.WithStructuredDependencies(dep)` |
+| `WithDependency(name, type)` | 追加单个结构化依赖 | `.WithDependency("redis", zcli.DependencyAfter)` |
+| `WithServiceOption(key, value)` | 设置单个 daemon 平台选项 | `.WithServiceOption(service.OptionRestart, "always")` |
+| `WithServiceOptionsMap(options)` | 批量合并 daemon 平台选项 | `.WithServiceOptionsMap(opts)` |
+| `WithAllowSudoFallback(enabled)` | 设置 sudo/su 回退策略 | `.WithAllowSudoFallback(true)` |
+| `WithServiceTimeouts(start, stop)` | 设置服务启动/停止超时 | `.WithServiceTimeouts(15*time.Second, 20*time.Second)` |
 
 ### 构建配置
 
@@ -168,6 +186,10 @@ app, _ := zcli.NewBuilder("zh").
 |------|------|------|
 | `WithValidator(fn)` | 添加验证器 | `.WithValidator(validateFunc)` |
 | `WithContext(ctx)` | 设置上下文 | `.WithContext(ctx)` |
+| `WithRuntime(rt)` | 替换运行时配置 | `.WithRuntime(rt)` |
+| `WithInitHook(hook)` | 添加命令执行前初始化钩子 | `.WithInitHook(loadConfig)` |
+| `WithErrorHandler(handler)` | 添加错误处理器 | `.WithErrorHandler(zcli.NewRecoveryErrorHandler(3, time.Second))` |
+| `WithMousetrapDisabled(true)` | 禁用 Windows 双击提示 | `.WithMousetrapDisabled(true)` |
 | `WithDefaultConfig()` | 使用默认配置 | `.WithDefaultConfig()` |
 
 ## 常见错误
@@ -220,13 +242,16 @@ app, err := zcli.NewBuilder("zh").
 
     // 服务配置
     WithWorkDir("/opt/enterprise-app").
+    WithServiceUser("enterprise").
     WithEnvVar("ENV", "production").
     WithEnvVar("LOG_LEVEL", "info").
-    WithDependencies("postgresql", "redis").
+    WithDependency("postgresql.service", zcli.DependencyAfter).
+    WithDependency("redis.service", zcli.DependencyAfter).
+    WithAllowSudoFallback(true).
 
     // 运行时配置
     WithServiceRunner(myService).
-    WithShutdownTimeouts(10*time.Second, 5*time.Second).
+    WithServiceTimeouts(15*time.Second, 20*time.Second).
 
     // 验证配置
     WithValidator(func(cfg *zcli.Config) error {

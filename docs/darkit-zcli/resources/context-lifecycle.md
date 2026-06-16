@@ -1,6 +1,6 @@
 # Context 生命周期管理
 
-> 最近更新（2026-04-17）：✅ 信号监听改由 `RunWait` 统一触发 `sm.Stop()`；✅ 停止时优先取消 `Run(ctx)`，再执行 stop hook；✅ 默认关闭预算调整为 15s + 5s；⚠️ 自定义信号时请追加而非替换默认监听。
+> 最近更新（2026-04-17）：信号监听改由 `RunWait` 统一触发 `sm.Stop()`；停止时优先取消 `Run(ctx)`，再执行 stop hook；默认关闭预算调整为 15s + 5s；自定义信号时请追加而非替换默认监听。
 
 ## 概述
 
@@ -205,7 +205,7 @@ func stopService() error {
 for {
     select {
     case <-ctx.Done():
-        return ctx.Err()  // 返回取消原因
+        return nil  // 正常优雅关闭；需要原因时读取 zcli.GetShutdownCause(ctx) 或 context.Cause(ctx)
     case data := <-dataChan:
         processData(data)
     }
@@ -307,7 +307,7 @@ func TestGracefulShutdown(t *testing.T) {
     }()
 
     err := runService(ctx)
-    if err != nil && err != context.Canceled {
+    if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
 }
@@ -317,11 +317,8 @@ func TestGracefulShutdown(t *testing.T) {
 
 ```go
 case <-ctx.Done():
-    switch ctx.Err() {
-    case context.Canceled:
-        slog.Info("收到取消信号")
-    case context.DeadlineExceeded:
-        slog.Info("操作超时")
+    if cause, ok := zcli.GetShutdownCause(ctx); ok {
+        slog.Info("收到停止信号", "reason", cause.Reason, "signal", cause.Signal)
     }
-    return ctx.Err()
+    return nil
 ```

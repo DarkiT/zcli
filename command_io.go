@@ -31,32 +31,32 @@ func (c *Cli) OutOrStdout() io.Writer {
 }
 
 // Print 打印到命令的标准输出
-func (c *Cli) Print(i ...interface{}) {
+func (c *Cli) Print(i ...any) {
 	c.command.Print(i...)
 }
 
 // PrintErr 打印到命令的错误输出
-func (c *Cli) PrintErr(i ...interface{}) {
+func (c *Cli) PrintErr(i ...any) {
 	c.command.PrintErr(i...)
 }
 
 // PrintErrf 格式化打印到命令的错误输出
-func (c *Cli) PrintErrf(format string, i ...interface{}) {
+func (c *Cli) PrintErrf(format string, i ...any) {
 	c.command.PrintErrf(format, i...)
 }
 
 // PrintErrln 打印到命令的错误输出并换行
-func (c *Cli) PrintErrln(i ...interface{}) {
+func (c *Cli) PrintErrln(i ...any) {
 	c.command.PrintErrln(i...)
 }
 
 // Printf 格式化打印到命令的标准输出
-func (c *Cli) Printf(format string, i ...interface{}) {
+func (c *Cli) Printf(format string, i ...any) {
 	c.command.Printf(format, i...)
 }
 
 // Println 打印到命令的标准输出并换行
-func (c *Cli) Println(i ...interface{}) {
+func (c *Cli) Println(i ...any) {
 	c.command.Println(i...)
 }
 
