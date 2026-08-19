@@ -154,6 +154,22 @@ MustBuild()             → BuildWithError 包装，失败 panic
 | `status`     | 查看服务状态                 |
 | `uninstall`  | 卸载系统服务                 |
 
+`install` / `reinstall` 支持透传服务自启参数，两者行为一致：命令之后的所有
+token（含未注册的 flag）原样作为服务启动参数保存，daemon 拉起时执行
+`Executable + 参数`：
+
+```sh
+./app install client --a=111 --b=22   # 自启时运行 ./app client --a=111 --b=22
+./app reinstall client --a=111 --b=22 # 覆盖重装，透传方式与 install 相同
+```
+
+- 提供参数时**整体替换**服务自启参数（含默认 `run` 与构建期 `WithArguments`）；
+  不带参数则保持现状。
+- 第一个非 flag token（通常是服务子命令）之后的参数不再被解析、原样作为服务
+  参数保存；`install --help` 仍由 cobra 正常响应。
+- 注意：这些参数在服务启动时仍会被二进制自身的 cobra 解析一次，目标子命令/flag
+  需在二进制中注册，或用 `--` 分隔（如 `./app install client -- --a=111`）。
+
 优雅关闭流程：
 
 ```

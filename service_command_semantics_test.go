@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -224,5 +225,101 @@ func newTestServiceManager(t *testing.T, svc service.Service) *sManager {
 		commands:  cli,
 		localizer: localizer,
 		service:   svc,
+	}
+}
+
+// TestInstallCommands_NonInterspersedArgs 验证 install/reinstall 关闭 flag 与
+// positional 的交错解析，使 `install client --a=111 --b=22` 在第一个非 flag
+// token 之后原样透传，同时不破坏 root persistent flag 的解析。
+func TestInstallCommands_NonInterspersedArgs(t *testing.T) {
+	sm := newTestServiceManager(t, &fakeDaemonService{})
+	for _, makeCmd := range []func() *Command{sm.newInstallCmd, sm.newReinstallCmd} {
+		cmd := makeCmd()
+		if err := cmd.Flags().Parse([]string{"client", "--a=111", "--b=22"}); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got := cmd.Flags().Args()
+		want := []string{"client", "--a=111", "--b=22"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("service args not passed through verbatim: got %v, want %v", got, want)
+		}
+	}
+}
+
+// TestInstallCommand_CobraPassesRawArgs 端到端验证 cobra 层把 install 之后的
+// 全部 token（含未注册 flag）原样交给 RunE。
+func TestInstallCommand_CobraPassesRawArgs(t *testing.T) {
+	app, err := NewBuilder("en").
+		WithQuickConfig("probe-app", "Probe", "probe", "0.1.0").
+		WithService(func(ctx context.Context) error { return nil }).
+		BuildWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installCmd, _, _ := app.Command().Find([]string{"install"})
+	if installCmd == nil {
+		t.Fatal("install command not found")
+	}
+	var got []string
+	installCmd.RunE = func(_ *Command, args []string) error {
+		got = append([]string(nil), args...)
+		return nil
+	}
+	app.Command().SetArgs([]string{"install", "client", "--a=111", "--b=22"})
+	if err := app.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	want := []string{"client", "--a=111", "--b=22"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RunE received %v, want %v", got, want)
+	}
+}
+
+// TestApplyInstallArguments_ReplacesServiceArgs 验证 CLI 参数整体替换为服务自启参数，
+// 并强制重建 service 实例（让 Install 使用新参数）。
+func TestApplyInstallArguments_ReplacesServiceArgs(t *testing.T) {
+	sm := newTestServiceManager(t, &fakeDaemonService{})
+	if err := sm.applyInstallArguments([]string{"client", "--a=111", "--b=22"}); err != nil {
+		t.Fatalf("applyInstallArguments: %v", err)
+	}
+	if sm.config == nil {
+		t.Fatal("expected config to be initialized")
+	}
+	want := []string{"client", "--a=111", "--b=22"}
+	if !reflect.DeepEqual(sm.config.Arguments, want) {
+		t.Fatalf("Arguments = %v, want %v", sm.config.Arguments, want)
+	}
+	if sm.service != nil {
+		t.Fatal("expected service reset so Install rebuilds with new args")
+	}
+}
+
+// TestApplyInstallArguments_OverridesBuildTimeArgs 验证整体替换语义：
+// 构建期 WithArguments 配置在 install 带参时被覆盖。
+func TestApplyInstallArguments_OverridesBuildTimeArgs(t *testing.T) {
+	sm := newTestServiceManager(t, &fakeDaemonService{})
+	sm.commands.config.service.Arguments = []string{"legacy", "--keep"}
+	cfg, err := sm.createServiceConfig()
+	if err != nil {
+		t.Fatalf("createServiceConfig: %v", err)
+	}
+	sm.config = cfg
+	if err := sm.applyInstallArguments([]string{"client", "--a=111"}); err != nil {
+		t.Fatalf("applyInstallArguments: %v", err)
+	}
+	want := []string{"client", "--a=111"}
+	if !reflect.DeepEqual(sm.config.Arguments, want) {
+		t.Fatalf("Arguments = %v, want %v（应整体替换构建期参数）", sm.config.Arguments, want)
+	}
+}
+
+// TestApplyInstallArguments_EmptyArgsKeepConfig 验证不带参数时不动 config/service。
+func TestApplyInstallArguments_EmptyArgsKeepConfig(t *testing.T) {
+	sm := newTestServiceManager(t, &fakeDaemonService{})
+	if err := sm.applyInstallArguments(nil); err != nil {
+		t.Fatalf("applyInstallArguments(nil): %v", err)
+	}
+	if sm.config != nil || sm.service == nil {
+		t.Fatal("expected config/service untouched for empty args")
 	}
 }

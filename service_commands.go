@@ -125,6 +125,25 @@ func (sm *sManager) buildBaseCommand(use, short string) *cobra.Command {
 	}
 }
 
+// applyInstallArguments 将 install/reinstall 透传的 CLI 参数整体替换为服务自启参数。
+// 参数写入 daemon config.Arguments（默认 ["run"] 或构建期 WithArguments 均被覆盖），
+// 并强制重建 service 实例，确保 Install/Reinstall 使用新参数。
+func (sm *sManager) applyInstallArguments(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if sm.config == nil {
+		cfg, err := sm.createServiceConfig()
+		if err != nil {
+			return err
+		}
+		sm.config = cfg
+	}
+	sm.config.Arguments = append([]string(nil), args...)
+	sm.service = nil // 新参数需在 service.New 时生效
+	return nil
+}
+
 func (sm *sManager) wrapRunE(runE func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
 	if runE == nil {
 		return nil
@@ -209,7 +228,15 @@ func (sm *sManager) classifyServicePresence(status service.Status, err error) (n
 // newInstallCmd 创建安装服务命令
 func (sm *sManager) newInstallCmd() *cobra.Command {
 	cmd := sm.buildBaseCommand("install", sm.localizer.GetOperation("install"))
+	// install 之后的 token 原样作为服务自启参数透传：关闭 flag 与 positional 的
+	// 交错解析，第一个非 flag token（通常是服务子命令）之后的全部参数（含未注册
+	// flag 如 --a=111）不再被 pflag 解析。注意不能用 DisableFlagParsing——
+	// 那会让 install 之前的 root persistent flag 既不生效又混入服务参数。
+	cmd.Flags().SetInterspersed(false)
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
+		if err := sm.applyInstallArguments(args); err != nil {
+			return err
+		}
 		// 检查权限
 		var err error
 
@@ -248,9 +275,15 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 	return cmd
 }
 
+// newReinstallCmd 创建覆盖重装服务命令
 func (sm *sManager) newReinstallCmd() *cobra.Command {
 	cmd := sm.buildBaseCommand("reinstall", sm.localizer.GetOperation("reinstall"))
+	// 与 install 相同：reinstall 之后的 token 作为服务自启参数透传
+	cmd.Flags().SetInterspersed(false)
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
+		if err := sm.applyInstallArguments(args); err != nil {
+			return err
+		}
 		if sm.service == nil {
 			svc, createErr := service.New(sm.buildRunner(), sm.config)
 			if createErr != nil {
