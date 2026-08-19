@@ -327,6 +327,19 @@ DependencyAfter   // 当前服务在该依赖之后启动
 DependencyBefore  // 当前服务在该依赖之前启动
 DependencyRequire // 必须依赖，失败则当前服务不启动
 DependencyWant    // 期望依赖，失败不阻止当前服务启动
+
+// 依赖构造函数（对齐 daemon，用于 WithDependency / WithStructuredDependencies）
+After(name string) Dependency
+Before(name string) Dependency
+Require(name string) Dependency
+Want(name string) Dependency
+
+// 平台选项常量（用于 WithServiceOption / WithServiceOptionsMap）
+OptionRestart / OptionRestartSec / OptionRunWait / OptionForceInstall /
+OptionNotify / OptionLimitNOFILE
+
+// Ready 在 WithNotify(true) 后通知 systemd/Windows 服务已就绪
+Ready() error
 ```
 
 ### 命令工厂
@@ -587,6 +600,9 @@ viperConfig := config.NewConfig(config.WithBindPFlags(flagSets...))
 - `ExportFlagsForViper` 按标志名去重；服务装配失败回传到 `BuildWithError`
 - 根命令策略：纯服务默认 `run`，混合应用默认 help，可用 `WithRootAction` 覆盖
 - 恢复标准 `completion` 子命令；`WithStructuredDependencies` 改为追加，覆盖用 `SetStructuredDependencies`
+- `install` / `reinstall` 支持透传服务自启参数：`./app install client --a=111 --b=22`，第一个非 flag token 之后原样保存，整体替换 daemon Arguments
+- 对抗审查修复：`CombineErrors` 单错误原样返回（不再被 `errors.Join` 包装）、`AddCommand(nil)` 防御、`ErrorAggregator` 并发安全
+- 新增依赖构造函数 `After`/`Before`/`Require`/`Want` 与平台选项常量（`OptionRestart` 等）、`Ready()`
 
 ### v0.2.0
 
