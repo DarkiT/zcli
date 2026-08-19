@@ -548,7 +548,13 @@ viperConfig := config.NewConfig(config.WithBindPFlags(flagSets...))
 
 ## 版本历史
 
-### v0.2.1（当前）
+### v0.5.0（当前）
+
+> 破坏性变更（相对 v0.4.x）：`(*Cli).Config()` 返回 `*Config`；
+> `WithStructuredDependencies` 改为追加语义（覆盖用 `SetStructuredDependencies`）；
+> `GetBindableFlagSets` 返回去重后的单个合并 `FlagSet`；`NewCli` 复用 `NewApp` 装配流水线；
+> 恢复标准 `completion` 子命令；服务命令改按 `ServiceCommandGroupID` 分组；
+> 纯服务无子命令默认 `run`、混合应用默认 `help`（可用 `WithRootAction` 覆盖）。
 
 - 修复 `attachInitHooks` 重复调用问题
 - `sync.Once` 确保 `stopChan` 只关闭一次
