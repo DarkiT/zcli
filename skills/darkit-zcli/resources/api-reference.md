@@ -170,6 +170,8 @@ func (b *Builder) WithDependencies(deps ...string) *Builder
 ```go
 func (b *Builder) WithLegacyDependencies(deps ...string) *Builder
 func (b *Builder) WithStructuredDependencies(deps ...Dependency) *Builder
+func (b *Builder) SetStructuredDependencies(deps ...Dependency) *Builder
+func (b *Builder) WithRootAction(action RootAction) *Builder
 func (b *Builder) WithDependency(name string, depType DependencyType) *Builder
 ```
 
@@ -185,22 +187,35 @@ func (b *Builder) WithChRoot(dir string) *Builder
 func (b *Builder) WithServiceOption(key string, value any) *Builder
 func (b *Builder) WithServiceOptionsMap(options ServiceOptions) *Builder
 func (b *Builder) WithAllowSudoFallback(enabled bool) *Builder
+func (b *Builder) WithForce(enabled bool) *Builder
+func (b *Builder) WithNotify(enabled bool) *Builder
 func (b *Builder) WithServiceConfig(fn func(*ServiceConfig)) *Builder
 ```
 
-配置系统服务安装与平台特定选项。`WithArguments()` 传入空列表会显式清空默认的 `"run"` 参数。
+配置系统服务安装与平台特定选项。`WithArguments()` 传入空列表会显式清空默认的 `"run"` 参数。`WithForce(true)` 对齐 daemon `Config.Force`；`WithNotify(true)` 写入 `OptionNotify`。
 
 ---
 
 ```go
 func (b *Builder) WithShutdownTimeouts(initial, grace time.Duration) *Builder
 func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder
+func (b *Builder) WithRestartTimeout(d time.Duration) *Builder
 func (b *Builder) WithMousetrapDisabled(disabled bool) *Builder
 func (b *Builder) WithRuntime(rt *Runtime) *Builder
 func (b *Builder) WithContext(ctx context.Context) *Builder
+func (b *Builder) WithSilenceErrors(enabled bool) *Builder
+func (b *Builder) WithSilenceUsage(enabled bool) *Builder
+func (b *Builder) WithNoColor(enabled bool) *Builder
+func (b *Builder) WithEnvVars(vars map[string]string) *Builder
+func (b *Builder) WithCommands(cmds ...*Command) *Builder
+func (b *Builder) WithCommandFactory(factory CommandFactory) *Builder
+func (b *Builder) WithPersistentFlags(configure func(*FlagSet)) *Builder
+func (b *Builder) WithFlags(configure func(*FlagSet)) *Builder
 ```
 
-设置运行时上下文、分级优雅关闭超时、daemon 启动/停止超时和 Windows mousetrap 行为。
+设置运行时上下文、分级优雅关闭超时、daemon 启动/停止超时、Windows mousetrap、输出静默/颜色，以及构建期命令与标志装配。
+
+`WithCommandFactory` 在 `*Cli` 就绪后构造命令，避免 Build 后再 Find/Remove/Add。`WithBuildTime` 接受 `time.DateTime` 或 RFC3339，非法值会累积到 `BuildWithError()`。
 
 ---
 
@@ -253,8 +268,11 @@ func (b *Builder) Build() *Cli
 
 ```go
 func (c *Cli) Execute() error
+func (c *Cli) Run() int
+func (c *Cli) Main()
+func ExitCode(err error) int
 ```
-执行应用主逻辑。
+`Execute` 执行应用主逻辑。`Run` 返回进程退出码（0 成功 / 2 用法或配置 / 1 其他失败），适合 `os.Exit(app.Run())`。`Main` 会直接按该退出码结束进程。
 
 ---
 

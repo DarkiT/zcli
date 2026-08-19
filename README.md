@@ -31,10 +31,8 @@ go get github.com/darkit/zcli
 
 ```go
 app, err := zcli.NewBuilder("en").
-    WithName("notesctl").
-    WithDisplayName("Notes CLI").
-    WithDescription("Recommended CLI-only example built with zcli.").
-    WithVersion("1.0.0").
+    WithQuickConfig("notesctl", "Notes CLI", "Recommended CLI-only example built with zcli.", "1.0.0").
+    WithSilenceUsage(true).
     WithValidator(func(cfg *zcli.Config) error {
         if strings.Contains(cfg.Basic().Name, " ") {
             return fmt.Errorf("application name must not contain spaces")
@@ -46,7 +44,15 @@ app, err := zcli.NewBuilder("en").
         slog.Info("init hook", "profile", profile, "command", cmd.CommandPath())
         return nil
     }).
+    WithPersistentFlags(func(flags *zcli.FlagSet) {
+        flags.String("profile", "dev", "Runtime profile")
+    }).
+    WithCommands(statusCmd, echoCmd).
     BuildWithError()
+if err != nil {
+    os.Exit(zcli.ExitUsage)
+}
+os.Exit(app.Run())
 ```
 
 ### 函数式服务（小型应用）
@@ -135,17 +141,18 @@ MustBuild()             → BuildWithError 包装，失败 panic
 
 ### 服务生命周期
 
-服务应用自动注册 7 个系统命令：
+服务应用自动注册 8 个系统命令：
 
-| 命令        | 说明                  |
-| ----------- | --------------------- |
-| `run`       | 前台运行（开发/调试） |
-| `install`   | 安装为系统服务        |
-| `start`     | 启动系统服务          |
-| `stop`      | 停止系统服务          |
-| `restart`   | 重启系统服务          |
-| `status`    | 查看服务状态          |
-| `uninstall` | 卸载系统服务          |
+| 命令         | 说明                         |
+| ------------ | ---------------------------- |
+| `run`        | 前台运行（开发/调试）        |
+| `install`    | 安装为系统服务               |
+| `reinstall`  | 覆盖重装（对齐 daemon Force）|
+| `start`      | 启动系统服务                 |
+| `stop`       | 停止系统服务                 |
+| `restart`    | 重启系统服务                 |
+| `status`     | 查看服务状态                 |
+| `uninstall`  | 卸载系统服务                 |
 
 优雅关闭流程：
 
@@ -199,11 +206,14 @@ WithArguments(args ...string) *Builder   // 传空列表可显式清空默认 "r
 WithChRoot(dir string) *Builder
 WithDependencies(deps ...string) *Builder              // require 型字符串依赖
 WithLegacyDependencies(deps ...string) *Builder         // daemon 原生字符串依赖
-WithStructuredDependencies(deps ...Dependency) *Builder // 结构化依赖
+WithStructuredDependencies(deps ...Dependency) *Builder // 追加结构化依赖
+SetStructuredDependencies(deps ...Dependency) *Builder  // 覆盖结构化依赖
 WithDependency(name string, depType DependencyType) *Builder // 单个结构化依赖
 WithServiceOption(key string, value any) *Builder       // daemon 平台选项
 WithServiceOptionsMap(options ServiceOptions) *Builder   // 批量 daemon 平台选项
 WithAllowSudoFallback(enabled bool) *Builder
+WithForce(enabled bool) *Builder                 // Install 覆盖已有配置
+WithNotify(enabled bool) *Builder                // systemd Type=notify / Windows 就绪通知
 WithCustomService(fn func(*Config)) *Builder
 WithServiceConfig(fn func(*ServiceConfig)) *Builder
 ```
@@ -213,6 +223,7 @@ WithServiceConfig(fn func(*ServiceConfig)) *Builder
 ```go
 WithShutdownTimeouts(initial, grace time.Duration) *Builder   // 优雅退出分级超时
 WithServiceTimeouts(start, stop time.Duration) *Builder        // daemon 启动/停止超时
+WithRestartTimeout(d time.Duration) *Builder                   // daemon 重启间隔 Timeout.Restart
 WithInitHook(hook InitHook) *Builder
 WithValidator(validator func(*Config) error) *Builder
 WithErrorHandler(handler ErrorHandler) *Builder
@@ -222,6 +233,15 @@ WithErrorHandler(handler ErrorHandler) *Builder
 
 ```go
 WithCommand(cmd *Command) *Builder            // 延迟收集命令
+WithCommands(cmds ...*Command) *Builder       // 批量延迟收集
+WithCommandFactory(fn CommandFactory) *Builder // 构建期注入需要 *Cli 的命令
+WithPersistentFlags(func(*FlagSet)) *Builder // 构建期配置根持久标志
+WithFlags(func(*FlagSet)) *Builder           // 构建期配置根本地标志
+WithEnvVars(vars map[string]string) *Builder
+WithSilenceErrors(enabled bool) *Builder
+WithSilenceUsage(enabled bool) *Builder
+WithNoColor(enabled bool) *Builder
+WithRootAction(action RootAction) *Builder // auto/run/help
 WithContext(ctx context.Context) *Builder
 WithMousetrapDisabled(disabled bool) *Builder // 禁用 Windows 双击提示
 WithRuntime(rt *Runtime) *Builder
@@ -244,6 +264,9 @@ Execute() error
 ExecuteC() (*Command, error)
 ExecuteContext(ctx context.Context) error
 ExecuteContextC(ctx context.Context) (*Command, error)
+Run() int                      // Execute + 退出码，适合 os.Exit(app.Run())
+Main()                         // 执行并以退出码结束进程
+ExitCode(err error) int        // 0 成功 / 2 用法或配置 / 1 其他失败
 
 // 命令管理
 AddCommand(cmds ...*Command)
@@ -308,6 +331,11 @@ WithCommandCompletion(completion CompletionFunc) CommandOption
 WithCommandFlags(configure func(flags *FlagSet)) CommandOption
 WithCommandPersistentFlags(configure func(flags *FlagSet)) CommandOption
 WithCommandSubcommands(children ...*Command) CommandOption
+WithCommandHidden(hidden bool) CommandOption
+WithCommandSilenceUsage(enabled bool) CommandOption
+WithCommandSilenceErrors(enabled bool) CommandOption
+WithCommandPreRunE(fn) CommandOption
+WithCommandPersistentPreRunE(fn) CommandOption
 ```
 
 ### 便利函数
@@ -323,7 +351,7 @@ NewCli(opts ...Option) *Cli
 ### 标志导出
 
 ```go
-ExportFlagsForViper(excludeFlags ...string) []*FlagSet   // 导出给 Viper 绑定
+ExportFlagsForViper(excludeFlags ...string) []*FlagSet   // 导出给 Viper 绑定（按名字去重）
 GetBindableFlagSets(excludeFlags ...string) []*FlagSet    // 过滤系统标志后的绑定集合
 GetAllFlagSets() []*FlagSet
 GetFilteredFlags(excludeFlags ...string) *FlagSet
@@ -412,6 +440,7 @@ app, _ := zcli.NewBuilder("zh").
 
 app.AddCommand(zcli.NewCommand("greet [name]",
     "打印问候语",
+    zcli.WithCommandSilenceUsage(true),
     zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
         name := "world"
         if len(args) > 0 {
@@ -422,7 +451,7 @@ app.AddCommand(zcli.NewCommand("greet [name]",
     }),
 ))
 
-app.Execute()
+os.Exit(app.Run())
 ```
 
 ### 模式二：函数式服务
@@ -498,10 +527,15 @@ viperConfig := config.NewConfig(config.WithBindPFlags(flagSets...))
 ## 注意事项
 
 - 生产代码优先使用 `BuildWithError()` 而不是 `Build()`，`Build()` 在验证失败时会 panic
-- `WithServiceRunner(nil)` 不会 panic——错误会累积到 `BuildWithError()` 阶段返回
-- `WithCommand()` 在 Builder 未构建时延迟收集命令，构建后则直接追加
+- `WithServiceRunner(nil)` / `WithService(nil)` / `WithRuntime(nil)` / 非法 `WithBuildTime` 不会 panic——错误会累积到 `BuildWithError()` 阶段返回
+- `WithCommand()` / `WithCommands()` / `WithCommandFactory()` 在 Builder 未构建时延迟收集，构建后则直接追加
+- 需要读取 `*Cli` 的命令用 `WithCommandFactory`，不要再 Build 后 Find/Remove/Add
 - 命令路径重复时最后注册的生效（与 Cobra 行为一致）
-- 系统标志（help/version/completion 等共 23 个）在 `ExportFlagsForViper` 中自动排除
+- 系统标志（help/version/completion 等共 23 个）在 `ExportFlagsForViper` 中自动排除，且同一标志只导出一次
+- 帮助输出到 stdout；未知主题仍走 stderr
+- 系统服务命令按 `ServiceCommandGroupID` 分组，不再按 `status`/`run` 等名字误伤用户命令
+- 纯服务无子命令默认 `run`；存在用户子命令时默认显示帮助，可用 `WithRootAction` 覆盖
+- `GetServiceError` / `IsServiceError` / `CombineErrors` 走 error chain，包装后仍可识别 `*ServiceError`
 
 ## 依赖
 
@@ -524,6 +558,13 @@ viperConfig := config.NewConfig(config.WithBindPFlags(flagSets...))
 - 新增 `Config.View()` 只读视图，避免频繁深拷贝
 - 命令管理方法按职责拆分为多个文件
 - 测试稳定性：支持 `ZCLI_TEST_TIMEOUT_MULTIPLIER` 环境变量
+- Builder 构建路径收束：`Build()` 复用 `BuildWithError()`；非法 `WithBuildTime` / `WithRuntime(nil)` / `WithService(nil)` 改为构建期累积错误
+- 新增构建期装配糖：`WithCommands`、`WithCommandFactory`、`WithPersistentFlags`、`WithFlags`、`WithEnvVars`、`WithSilence*`
+- 新增 `Run()` / `Main()` / `ExitCode()`；`CombineErrors` 与 `GetServiceError` 走 error chain
+- 帮助改写 stdout；服务命令按 `ServiceCommandGroupID` 分组，不再按名字误伤用户命令
+- `ExportFlagsForViper` 按标志名去重；服务装配失败回传到 `BuildWithError`
+- 根命令策略：纯服务默认 `run`，混合应用默认 help，可用 `WithRootAction` 覆盖
+- 恢复标准 `completion` 子命令；`WithStructuredDependencies` 改为追加，覆盖用 `SetStructuredDependencies`
 
 ### v0.2.0
 

@@ -173,12 +173,17 @@ app, _ := zcli.NewBuilder("zh").
 | `WithChRoot(dir)` | 设置 chroot 根目录 | `.WithChRoot("/srv/jail")` |
 | `WithDependencies(deps...)` | 设置 require 型结构化依赖 | `.WithDependencies("postgresql")` |
 | `WithLegacyDependencies(deps...)` | 设置 daemon 原生字符串依赖 | `.WithLegacyDependencies("network.target")` |
-| `WithStructuredDependencies(deps...)` | 批量设置结构化依赖 | `.WithStructuredDependencies(dep)` |
+| `WithStructuredDependencies(deps...)` | 追加结构化依赖 | `.WithStructuredDependencies(dep)` |
+| `SetStructuredDependencies(deps...)` | 覆盖结构化依赖 | `.SetStructuredDependencies(dep)` |
+| `WithRootAction(action)` | 根命令默认 run/help/auto | `.WithRootAction(zcli.RootActionHelp)` |
 | `WithDependency(name, type)` | 追加单个结构化依赖 | `.WithDependency("redis", zcli.DependencyAfter)` |
 | `WithServiceOption(key, value)` | 设置单个 daemon 平台选项 | `.WithServiceOption(service.OptionRestart, "always")` |
 | `WithServiceOptionsMap(options)` | 批量合并 daemon 平台选项 | `.WithServiceOptionsMap(opts)` |
 | `WithAllowSudoFallback(enabled)` | 设置 sudo/su 回退策略 | `.WithAllowSudoFallback(true)` |
+| `WithForce(enabled)` | Install 覆盖已有服务配置 | `.WithForce(true)` |
+| `WithNotify(enabled)` | 启用 systemd/Windows 就绪通知 | `.WithNotify(true)` |
 | `WithServiceTimeouts(start, stop)` | 设置服务启动/停止超时 | `.WithServiceTimeouts(15*time.Second, 20*time.Second)` |
+| `WithRestartTimeout(d)` | 设置 daemon 重启间隔 | `.WithRestartTimeout(5*time.Second)` |
 
 ### 构建配置
 

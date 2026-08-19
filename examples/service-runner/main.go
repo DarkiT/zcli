@@ -65,10 +65,7 @@ func main() {
 	worker := newQueueWorker(logger, 2*time.Second)
 
 	app, err := zcli.NewBuilder("en").
-		WithName(worker.Name()).
-		WithDisplayName("Queue Worker").
-		WithDescription("Recommended ServiceRunner example for non-trivial services.").
-		WithVersion("1.0.0").
+		WithQuickConfig(worker.Name(), "Queue Worker", "Recommended ServiceRunner example for non-trivial services.", "1.0.0").
 		WithServiceRunner(worker).
 		WithServiceTimeouts(15*time.Second, 20*time.Second).
 		WithValidator(func(cfg *zcli.Config) error {
@@ -80,11 +77,8 @@ func main() {
 		BuildWithError()
 	if err != nil {
 		logger.Error("build failed", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
 
-	if err := app.Execute(); err != nil {
-		logger.Error("service command failed", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(app.Run())
 }

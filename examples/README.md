@@ -6,6 +6,8 @@
 
 - 示例默认语言为英文
 - 可能失败的构建路径统一使用 `BuildWithError()`
+- 命令、根标志和需要 `*Cli` 的子命令尽量在 Builder 链内完成（`WithCommands` / `WithPersistentFlags` / `WithCommandFactory`）
+- 常规 `main` 使用 `os.Exit(app.Run())`
 - 非 trivial 服务推荐使用 `WithServiceRunner`
 - 小型服务可使用 `WithService(run, stop)` 作为简洁选项
 
@@ -66,12 +68,12 @@ go run ./examples/complete health
 go run ./examples/complete config show
 go run ./examples/complete --version
 # 前台服务模式：Ctrl+C 应优雅退出，不打印 Usage / context canceled
-# go run ./examples/complete
+# go run ./examples/complete run
 ```
 
 ## 注意事项
 
-- 所有服务示例自动注册 `run`、`install`、`start`、`stop`、`restart`、`status`、`uninstall` 共 7 个系统命令
+- 所有服务示例自动注册 `run`、`install`、`reinstall`、`start`、`stop`、`restart`、`status`、`uninstall` 共 8 个系统命令
 - `install` / `start` / `stop` 流程需要平台特定权限
 - 如需最短启动路径（内部工具），参考主包 API 中的 `QuickCLI`、`QuickService` 和 `QuickServiceWithStop`
 

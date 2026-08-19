@@ -12,10 +12,8 @@ import (
 
 func main() {
 	app, err := zcli.NewBuilder("en").
-		WithName("notesctl").
-		WithDisplayName("Notes CLI").
-		WithDescription("Recommended CLI-only example built with zcli.").
-		WithVersion("1.0.0").
+		WithQuickConfig("notesctl", "Notes CLI", "Recommended CLI-only example built with zcli.", "1.0.0").
+		WithSilenceUsage(true).
 		WithValidator(func(cfg *zcli.Config) error {
 			if strings.Contains(cfg.Basic().Name, " ") {
 				return fmt.Errorf("application name must not contain spaces")
@@ -30,25 +28,21 @@ func main() {
 			slog.Info("init hook completed", "profile", profile, "command", cmd.CommandPath(), "args", args)
 			return nil
 		}).
+		WithPersistentFlags(func(flags *zcli.FlagSet) {
+			flags.String("profile", "dev", "Runtime profile to load")
+			flags.Bool("debug", false, "Enable debug mode")
+		}).
+		WithCommands(
+			newStatusCommand(),
+			newEchoCommand(),
+		).
 		BuildWithError()
 	if err != nil {
 		slog.Error("build failed", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
 
-	app.Command().SilenceUsage = true
-	app.PersistentFlags().String("profile", "dev", "Runtime profile to load")
-	app.PersistentFlags().Bool("debug", false, "Enable debug mode")
-
-	app.AddCommand(
-		newStatusCommand(),
-		newEchoCommand(),
-	)
-
-	if err := app.Execute(); err != nil {
-		slog.Error("command failed", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(app.Run())
 }
 
 func newStatusCommand() *zcli.Command {
@@ -82,6 +76,7 @@ func newEchoCommand() *zcli.Command {
 	return zcli.NewCommand(
 		"echo [message]",
 		"Echo a message",
+		zcli.WithCommandSilenceUsage(true),
 		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			if len(args) == 0 {
 				return fmt.Errorf("message is required")

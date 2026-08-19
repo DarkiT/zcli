@@ -13,29 +13,23 @@ func main() {
 	workDir, err := os.Getwd()
 	if err != nil {
 		slog.Error("failed to get working directory", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitFailure)
 	}
 
 	app, err := zcli.NewBuilder("en").
-		WithName("mailer-worker").
-		WithDisplayName("Mailer Worker").
-		WithDescription("Recommended function-based service example for small applications.").
-		WithVersion("1.0.0").
+		WithQuickConfig("mailer-worker", "Mailer Worker", "Recommended function-based service example for small applications.", "1.0.0").
 		WithService(runMailerWorker, stopMailerWorker).
 		WithWorkDir(workDir).
-		WithEnvVar("APP_ENV", "production").
+		WithEnvVars(map[string]string{"APP_ENV": "production"}).
 		WithDependency("network-online.target", zcli.DependencyAfter).
 		WithServiceTimeouts(15*time.Second, 20*time.Second).
 		BuildWithError()
 	if err != nil {
 		slog.Error("build failed", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
 
-	if err := app.Execute(); err != nil {
-		slog.Error("service command failed", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(app.Run())
 }
 
 func runMailerWorker(ctx context.Context) error {

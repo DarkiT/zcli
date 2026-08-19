@@ -147,6 +147,9 @@ func TestExamplesE2E_FlagExport(t *testing.T) {
 	bin := buildExample(t, "flag-export")
 	out := runBinary(t, bin, "inspect", "--region", "eu-west-1", "--output", "yaml", "--verbose")
 	assertContains(t, out, "system flags (23)", "bindable flag names", "region = eu-west-1")
+	if strings.Count(out, "region = eu-west-1") != 1 {
+		t.Fatalf("region should be exported once\n%s", out)
+	}
 }
 
 func TestExamplesE2E_ServiceConfig(t *testing.T) {
@@ -158,6 +161,7 @@ func TestExamplesE2E_ServiceConfig(t *testing.T) {
 func TestExamplesE2E_GracefulSignalShutdown(t *testing.T) {
 	tests := []struct {
 		name         string
+		args         []string
 		want         []string
 		forbidden    []string
 		cleanupsOnce bool
@@ -174,6 +178,7 @@ func TestExamplesE2E_GracefulSignalShutdown(t *testing.T) {
 		},
 		{
 			name:         "complete",
+			args:         []string{"run"},
 			want:         []string{"服务启动", "收到停止信号，优雅退出中", "生命周期: BeforeStop", "生命周期: AfterStop"},
 			forbidden:    []string{"Error:", "Usage:", "context canceled", "命令执行失败"},
 			cleanupsOnce: true,
@@ -183,7 +188,7 @@ func TestExamplesE2E_GracefulSignalShutdown(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bin := buildExample(t, tt.name)
-			out := runBinaryWithSignal(t, bin)
+			out := runBinaryWithSignal(t, bin, tt.args...)
 			assertContains(t, out, tt.want...)
 			assertNotContains(t, out, tt.forbidden...)
 			if tt.cleanupsOnce && strings.Count(out, "服务清理完成") != 1 {

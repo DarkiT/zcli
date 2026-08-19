@@ -389,49 +389,32 @@ func main() {
 
 	// --- Builder：全量配置 ---
 
-	app, err := zcli.NewBuilder("zh"). // 中文界面
-						WithName(svc.Name()).
-						WithDisplayName("Complete App").
-						WithDescription("zcli 全能力演示应用 — 展示 Builder、ServiceRunner、生命周期、标志导出、错误处理、多语言等全部特性。").
-						WithVersion("3.0.0").
-						WithLogo(appLogo). // ASCII Logo
-
-		// Git 信息（通常由 CI 注入）
+	app, err := zcli.NewBuilder("zh").
+		WithQuickConfig(svc.Name(), "Complete App", "zcli 全能力演示应用 — 展示 Builder、ServiceRunner、生命周期、标志导出、错误处理、多语言等全部特性。", "3.0.0").
+		WithLogo(appLogo).
 		WithGitInfo("a1b2c3d", "main", "v3.0.0").
 		WithBuildTime("2026-06-15 10:30:00").
 		WithDebug(false).
-
-		// 服务基础配置
 		WithServiceRunner(managed).
 		WithWorkDir(workDir).
-		WithEnvVar("APP_PROFILE", cfg.Profile).
-		WithEnvVar("GOMAXPROCS", "4").
-
-		// 高级服务配置（install 时生效）
+		WithEnvVars(map[string]string{
+			"APP_PROFILE": cfg.Profile,
+			"GOMAXPROCS":  "4",
+		}).
 		WithServiceUser("appuser").
 		WithExecutable(execPath).
 		WithArguments("run", "--profile", cfg.Profile).
-
-		// 结构化依赖
-		WithDependency("network-online.target", zcli.DependencyAfter).
 		WithStructuredDependencies(
+			zcli.Dependency{Name: "network-online.target", Type: zcli.DependencyAfter},
 			zcli.Dependency{Name: "postgresql.service", Type: zcli.DependencyRequire},
 			zcli.Dependency{Name: "redis.service", Type: zcli.DependencyWant},
 		).
-
-		// 平台选项
 		WithServiceOption("Restart", "on-failure").
 		WithServiceOption("RestartSec", 10).
 		WithAllowSudoFallback(true).
-
-		// 超时控制
 		WithShutdownTimeouts(15*time.Second, 5*time.Second).
 		WithServiceTimeouts(30*time.Second, 20*time.Second).
-
-		// Windows 双击提示
 		WithMousetrapDisabled(true).
-
-		// 配置验证
 		WithValidator(func(cfg *zcli.Config) error {
 			if cfg.Basic().Name == "" {
 				return fmt.Errorf("应用名称不能为空")
@@ -441,8 +424,6 @@ func main() {
 			}
 			return nil
 		}).
-
-		// 初始化钩子（命令执行前）
 		WithInitHook(func(cmd *zcli.Command, args []string) error {
 			logger.Info(
 				"InitHook 触发",
@@ -451,41 +432,24 @@ func main() {
 			)
 			return nil
 		}).
-
-		// 错误处理器链
 		WithErrorHandler(zcli.NewLoggingErrorHandler(slogAdapter{logger})).
 		WithErrorHandler(zcli.NewRecoveryErrorHandler(3, 2*time.Second)).
-
-		// 延迟收集命令
-		WithCommand(newInspectCommand(nil)).
-		WithCommand(newHealthCommand()).
-		WithCommand(newConfigCommand()).
-
-		// 构建
+		WithPersistentFlags(func(flags *zcli.FlagSet) {
+			flags.String("profile", cfg.Profile, "运行配置名称")
+			flags.Bool("debug", false, "启用调试日志")
+		}).
+		WithCommandFactory(func(app *zcli.Cli) *zcli.Command {
+			return newInspectCommand(app)
+		}).
+		WithCommands(newHealthCommand(), newConfigCommand()).
 		BuildWithError()
 	if err != nil {
 		logger.Error("构建失败", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
-
-	// --- 设置全局标志 ---
-
-	app.PersistentFlags().String("profile", cfg.Profile, "运行配置名称")
-	app.PersistentFlags().Bool("debug", false, "启用调试日志")
-
-	// --- 补注：inspect 命令需要 app 引用，用标记后的版本替换 ---
-	// （Builder 阶段 app 尚未存在，build 后替换）
-	if inspectCmd, _, _ := app.Command().Find([]string{"inspect"}); inspectCmd != nil {
-		app.RemoveCommand(inspectCmd)
-		app.AddCommand(newInspectCommand(app))
-	}
-
-	// --- 执行 ---
 
 	if err := app.Execute(); err != nil {
 		logger.Error("命令执行失败", "error", err)
-
-		// 结构化错误检查
 		if svcErr, ok := zcli.GetServiceError(err); ok {
 			logger.Error(
 				"服务错误详情",
@@ -495,6 +459,6 @@ func main() {
 				"message", svcErr.Message,
 			)
 		}
-		os.Exit(1)
+		os.Exit(zcli.ExitCode(err))
 	}
 }

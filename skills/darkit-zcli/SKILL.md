@@ -46,7 +46,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 
 读 `./resources/context-lifecycle.md`、`./resources/service-management.md` → 检视 `service.go`、`service_runtime.go`、`service_support.go`、`shutdown_cause.go`
 
-### 服务命令语义（run/install/start/stop/restart/status/uninstall）
+### 服务命令语义（run/install/reinstall/start/stop/restart/status/uninstall）
 
 检视 `service_commands.go`
 
@@ -54,7 +54,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 
 检视 `service_interface.go`
 
-### 高级服务注册（Executable / ChRoot / AllowSudoFallback / 平台 Options）
+### 高级服务注册（Executable / ChRoot / AllowSudoFallback / Force / Notify / 平台 Options）
 
 检视 `builder.go`、`service.go`、`service_interface.go` → 交叉参考 `examples/service-config`
 
@@ -88,7 +88,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 | `command_factory.go`   | NewCommand 工厂，CommandOption 函数族，Args 校验器                  |
 | `command_flags.go`     | 标志导出、系统标志过滤、GetBindableFlagSets                         |
 | `service.go`           | sManager 创建、buildRunner、createServiceConfig、权限检查           |
-| `service_commands.go`  | 7 个系统命令装配（run/install/start/stop/restart/status/uninstall） |
+| `service_commands.go`  | 8 个系统命令装配（run/install/reinstall/start/stop/restart/status/uninstall） |
 | `service_runtime.go`   | 服务运行时：managed run/stop/wait、executeRunCommand                |
 | `service_support.go`   | 权限检查、强制退出调度、错误处理器链                                |
 | `service_interface.go` | ServiceRunner 接口、BaseService、FuncService、ManagedService        |
@@ -107,7 +107,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 | ----------------------------------- | ------------------------------------------ |
 | `enhanced_test.go`                  | Builder 增强功能集成测试                   |
 | `service_alignment_test.go`         | 服务管理与 CLI 对齐验证                    |
-| `service_command_semantics_test.go` | 7 个命令语义正确性                         |
+| `service_command_semantics_test.go` | 8 个命令语义正确性                         |
 | `service_signal_test.go`            | 信号处理与优雅关闭                         |
 | `tests/e2e/examples_test.go`        | 官方 examples 端到端与 SIGINT 静默退出回归 |
 | `service_force_exit_test.go`        | 强制退出路径                               |
@@ -119,14 +119,18 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 
 - 生产代码优先使用 `BuildWithError()`；`Build()` 在验证失败时 panic
 - 非 trivial 服务推荐 `WithServiceRunner(...)`；小型服务可用 `WithService(run, stop)`
-- `WithServiceRunner(nil)` 不会 panic——错误累积到 `BuildWithError()` 阶段
-- `WithCommand()` 在 Builder 未构建时延迟收集，构建后直接追加
+- `WithServiceRunner(nil)` / `WithService(nil)` / `WithRuntime(nil)` 不会 panic——错误累积到 `BuildWithError()` 阶段
+- `WithCommand()` / `WithCommands()` / `WithCommandFactory()` 在 Builder 未构建时延迟收集，构建后直接追加
+- 常规 main 优先 `os.Exit(app.Run())`；需要读取 `*Cli` 的命令用 `WithCommandFactory`
 - 默认关闭预算：`ShutdownInitial=15s` + `ShutdownGrace=5s`
 - 默认 `StopTimeout=20s`，后台模式超时触发强制退出
-- `ExportFlagsForViper` 自动排除 23 个系统标志
+- `ExportFlagsForViper` 自动排除 23 个系统标志，并按名字去重
+- 帮助写到 stdout；服务命令按 `ServiceCommandGroupID` 分组
+- 纯服务根命令默认 `run`，混合应用默认 help，可用 `WithRootAction` 覆盖
 - 示例默认英文，中文需 `NewBuilder("zh")`
 - `ManagedService` 正常取消会返回 `nil`，并保证 `BeforeStop` / `Stop` / `AfterStop` 在并发关闭路径只执行一次
 - 官方 E2E 位于 `tests/e2e/examples_test.go`，会断言 Ctrl+C 不打印 `Usage:` / `context canceled` / 命令失败日志
+- 本地开发通过仓库根 `go.work` 把 `github.com/darkit/daemon` 指到 `/workspace/service`；对齐 `Force`/`Notify`/`Timeout.Restart`/`reinstall` 与 daemon 哨兵错误
 
 ## 约束
 

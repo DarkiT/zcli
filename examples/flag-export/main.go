@@ -21,30 +21,36 @@ func bindFlagSets(flagSets ...*zcli.FlagSet) func(*externalConfig) {
 
 func main() {
 	app, err := zcli.NewBuilder("en").
-		WithName("bindable-flags").
-		WithDisplayName("Bindable Flags Demo").
-		WithDescription("Recommended example for exporting zcli flags to other packages.").
-		WithVersion("1.0.0").
+		WithQuickConfig("bindable-flags", "Bindable Flags Demo", "Recommended example for exporting zcli flags to other packages.", "1.0.0").
+		WithPersistentFlags(func(flags *zcli.FlagSet) {
+			flags.String("config", "", "Path to the configuration file")
+			flags.Bool("debug", false, "Enable debug logging")
+			flags.String("region", "us-east-1", "Target region")
+		}).
+		WithFlags(func(flags *zcli.FlagSet) {
+			flags.Int("port", 8080, "HTTP port")
+			flags.Bool("dry-run", false, "Preview changes without applying them")
+		}).
+		WithCommandFactory(func(app *zcli.Cli) *zcli.Command {
+			return newInspectCommand(app)
+		}).
 		BuildWithError()
 	if err != nil {
 		slog.Error("build failed", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
 
-	inspectCmd := newInspectCommand(app)
-	setupFlags(app, inspectCmd)
-	app.AddCommand(inspectCmd)
-
-	if err := app.Execute(); err != nil {
-		slog.Error("command failed", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(app.Run())
 }
 
 func newInspectCommand(app *zcli.Cli) *zcli.Command {
 	return zcli.NewCommand(
 		"inspect",
 		"Show which flags can be exported to another package",
+		zcli.WithCommandFlags(func(flags *zcli.FlagSet) {
+			flags.String("output", "json", "Output format")
+			flags.Bool("verbose", false, "Show verbose details")
+		}),
 		zcli.WithCommandRunE(func(cmd *zcli.Command, args []string) error {
 			forwarded := app.ExportFlagsForViper("debug")
 			external := &externalConfig{}
@@ -72,16 +78,4 @@ func newInspectCommand(app *zcli.Cli) *zcli.Command {
 			return nil
 		}),
 	)
-}
-
-func setupFlags(app *zcli.Cli, inspectCmd *zcli.Command) {
-	app.PersistentFlags().String("config", "", "Path to the configuration file")
-	app.PersistentFlags().Bool("debug", false, "Enable debug logging")
-	app.PersistentFlags().String("region", "us-east-1", "Target region")
-
-	app.Flags().Int("port", 8080, "HTTP port")
-	app.Flags().Bool("dry-run", false, "Preview changes without applying them")
-
-	inspectCmd.Flags().String("output", "json", "Output format")
-	inspectCmd.Flags().Bool("verbose", false, "Show verbose details")
 }

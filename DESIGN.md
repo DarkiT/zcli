@@ -1,6 +1,6 @@
 # zcli DESIGN
 
-> 设计说明与关键决策的正式记录。更细的审计细节见 `docs/darkit-zcli/resources/design-audit-2026-03.md`，兼容契约见 `docs/darkit-zcli/resources/cobra-fusion-contract.md`。
+> 设计说明与关键决策的正式记录。更细的审计细节见 `skills/darkit-zcli/resources/design-audit-2026-03.md`，兼容契约见 `skills/darkit-zcli/resources/cobra-fusion-contract.md`。
 
 ## 模块定位
 
@@ -50,7 +50,7 @@
 ### Repo 文档
 
 - `README.md`：外部使用入口与 API 示例
-- `docs/darkit-zcli/resources/design-audit-2026-03.md`：设计审计与边界问题详细记录
+- `skills/darkit-zcli/resources/design-audit-2026-03.md`：设计审计与边界问题详细记录
 
 ## 核心设计决策
 

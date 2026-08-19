@@ -36,20 +36,19 @@ func main() {
 	}
 
 	app, err := zcli.NewBuilder("en").
-		WithName("payments-agent").
-		WithDisplayName("Payments Agent").
-		WithDescription("Advanced service configuration example.").
-		WithVersion("1.0.0").
+		WithQuickConfig("payments-agent", "Payments Agent", "Advanced service configuration example.", "1.0.0").
 		WithService(runAgent, stopAgent).
 		WithWorkDir(workDir).
 		WithChRoot(workDir).
 		WithExecutable(executable).
 		WithArguments("run", "--profile", "production").
 		WithServiceUser("svc-payments").
-		WithEnvVar("APP_ENV", "production").
-		WithEnvVar("LOG_FORMAT", "json").
-		WithDependency("network-online.target", zcli.DependencyAfter).
+		WithEnvVars(map[string]string{
+			"APP_ENV":    "production",
+			"LOG_FORMAT": "json",
+		}).
 		WithStructuredDependencies(
+			zcli.Dependency{Name: "network-online.target", Type: zcli.DependencyAfter},
 			zcli.Dependency{Name: "postgresql.service", Type: zcli.DependencyRequire},
 			zcli.Dependency{Name: "redis.service", Type: zcli.DependencyWant},
 		).
@@ -63,18 +62,16 @@ func main() {
 		WithServiceConfig(func(cfg *zcli.ServiceConfig) {
 			cfg.Options["LimitNOFILE"] = 65535
 		}).
+		WithCommandFactory(func(app *zcli.Cli) *zcli.Command {
+			return newInspectCommand(app)
+		}).
 		BuildWithError()
 	if err != nil {
 		slog.Error("build failed", "error", err)
-		os.Exit(1)
+		os.Exit(zcli.ExitUsage)
 	}
 
-	app.AddCommand(newInspectCommand(app))
-
-	if err := app.Execute(); err != nil {
-		slog.Error("service command failed", "error", err)
-		os.Exit(1)
-	}
+	os.Exit(app.Run())
 }
 
 func newInspectCommand(app *zcli.Cli) *zcli.Command {
