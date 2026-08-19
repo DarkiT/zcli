@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -411,8 +412,9 @@ func (reh *RecoveryErrorHandler) retryOperation(err *ServiceError) error {
 // 错误聚合器
 // =============================================================================
 
-// ErrorAggregator 错误聚合器
+// ErrorAggregator 错误聚合器（并发安全）
 type ErrorAggregator struct {
+	mu     sync.Mutex
 	errors []error
 }
 
@@ -423,23 +425,32 @@ func NewErrorAggregator() *ErrorAggregator {
 
 // Add 添加错误
 func (ea *ErrorAggregator) Add(err error) {
-	if err != nil {
-		ea.errors = append(ea.errors, err)
+	if err == nil {
+		return
 	}
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
+	ea.errors = append(ea.errors, err)
 }
 
 // HasErrors 检查是否有错误
 func (ea *ErrorAggregator) HasErrors() bool {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
 	return len(ea.errors) > 0
 }
 
 // Count 返回错误数量
 func (ea *ErrorAggregator) Count() int {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
 	return len(ea.errors)
 }
 
 // Errors 返回所有错误的副本，避免调用方修改内部切片。
 func (ea *ErrorAggregator) Errors() []error {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
 	if len(ea.errors) == 0 {
 		return nil
 	}
@@ -448,6 +459,8 @@ func (ea *ErrorAggregator) Errors() []error {
 
 // Error 返回聚合错误信息
 func (ea *ErrorAggregator) Error() string {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
 	if len(ea.errors) == 0 {
 		return ""
 	}
@@ -466,6 +479,8 @@ func (ea *ErrorAggregator) Error() string {
 
 // Clear 清除所有错误
 func (ea *ErrorAggregator) Clear() {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
 	ea.errors = nil
 }
 
@@ -516,6 +531,21 @@ func WrapServiceOperationError(err error, code ErrorCode, operation, serviceName
 }
 
 // CombineErrors 合并多个错误，保留原始类型以便 errors.Is / errors.As。
+// 无错误返回 nil；单个非 nil 错误原样返回（errors.Join 会额外包装一层，
+// 破坏与原始错误的同一性）；多个错误用 errors.Join 聚合。
 func CombineErrors(errs ...error) error {
-	return errors.Join(errs...)
+	var nonNil []error
+	for _, err := range errs {
+		if err != nil {
+			nonNil = append(nonNil, err)
+		}
+	}
+	switch len(nonNil) {
+	case 0:
+		return nil
+	case 1:
+		return nonNil[0]
+	default:
+		return errors.Join(nonNil...)
+	}
 }

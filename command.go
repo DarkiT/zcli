@@ -169,8 +169,14 @@ func (c *Cli) setupService() error {
 // ============================================================================
 
 // AddCommand 添加一个或多个子命令到当前命令
+// 防御：忽略 nil 命令，避免透传 cobra 后 panic。
 func (c *Cli) AddCommand(cmds ...*Command) {
-	c.command.AddCommand(cmds...)
+	for _, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		c.command.AddCommand(cmd)
+	}
 }
 
 // AddGroup 添加一个或多个命令组到当前命令

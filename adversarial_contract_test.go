@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -382,5 +383,85 @@ func TestAdversarial_ApplyInstallArguments_MultipleCallsReplace(t *testing.T) {
 	want := []string{"v2", "--x"}
 	if !reflect.DeepEqual(sm.config.Arguments, want) {
 		t.Fatalf("Arguments = %v, want %v", sm.config.Arguments, want)
+	}
+}
+
+// ===== 全模块对抗审查（2026-08-19）=====
+
+// TestAdversarial_CombineErrorsSingleReturnsOriginal 验证 CombineErrors 的
+// 边界语义：无错误返回 nil、单错误原样返回（errors.Join 会包装一层、
+// 破坏同一性）、多错误聚合且可被 errors.Is 识别。
+func TestAdversarial_CombineErrorsSingleReturnsOriginal(t *testing.T) {
+	if CombineErrors() != nil {
+		t.Fatal("CombineErrors() should be nil")
+	}
+	if CombineErrors(nil, nil) != nil {
+		t.Fatal("CombineErrors(nil,nil) should be nil")
+	}
+	single := errors.New("x")
+	if CombineErrors(single) != single {
+		t.Fatal("CombineErrors(single) should return the original error")
+	}
+	if CombineErrors(nil, single) != single {
+		t.Fatal("CombineErrors(nil,single) should return the original error")
+	}
+	a, b := errors.New("a"), errors.New("b")
+	joined := CombineErrors(a, b)
+	if joined == nil {
+		t.Fatal("CombineErrors(a,b) should not be nil")
+	}
+	if !errors.Is(joined, a) || !errors.Is(joined, b) {
+		t.Fatal("CombineErrors multi should preserve errors.Is")
+	}
+}
+
+// TestAdversarial_AddCommandNilIgnored 验证 AddCommand 防御 nil：
+// 混入 nil 命令不 panic，非 nil 命令正常注册。
+func TestAdversarial_AddCommandNilIgnored(t *testing.T) {
+	app, err := NewBuilder("en").WithQuickConfig("cmd-edge", "C", "c", "1.0").BuildWithError()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.AddCommand(nil)
+	app.AddCommand(NewCommand("ok", "d"), nil, NewCommand("ok2", "d2"))
+	found := map[string]bool{}
+	for _, cmd := range app.Command().Commands() {
+		found[cmd.Name()] = true
+	}
+	if !found["ok"] || !found["ok2"] {
+		t.Fatalf("expected nil commands ignored and others registered, got %v", found)
+	}
+}
+
+// TestAdversarial_ErrorAggregatorConcurrentSafe 验证 ErrorAggregator 并发安全：
+// 并发 Add 不丢错误、无 data race（配合 -race 运行）。
+func TestAdversarial_ErrorAggregatorConcurrentSafe(t *testing.T) {
+	ea := NewErrorAggregator()
+	if ea.HasErrors() || ea.Count() != 0 || ea.Errors() != nil || ea.Error() != "" {
+		t.Fatal("empty aggregator state wrong")
+	}
+	ea.Add(errors.New("a"))
+	got := ea.Errors()
+	got[0] = errors.New("mut") // 改副本
+	if ea.Errors()[0].Error() != "a" {
+		t.Fatal("Errors() aliases internal slice")
+	}
+	ea.Clear()
+	ea.Add(errors.New("b"))
+	ea.Add(nil) // nil 忽略
+	if ea.Count() != 1 {
+		t.Fatalf("Clear/Add(nil) broken: %d", ea.Count())
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ea.Add(errors.New("x"))
+		}()
+	}
+	wg.Wait()
+	if ea.Count() != 21 {
+		t.Fatalf("concurrent Add lost errors: count=%d", ea.Count())
 	}
 }
