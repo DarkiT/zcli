@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	service "github.com/darkit/daemon"
@@ -111,7 +112,7 @@ func TestAttachServiceAssemblyInjectsCommandsAndPreservesRootFallback(t *testing
 
 	cli.attachServiceAssembly(sm)
 
-	for _, name := range []string{"run", "install", "uninstall", "start", "stop", "restart", "status"} {
+	for _, name := range []string{"run", "install", "reinstall", "uninstall", "start", "stop", "restart", "status"} {
 		cmd, _, err := cli.command.Find([]string{name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected service command %q to be injected, cmd=%v err=%v", name, cmd, err)
@@ -130,6 +131,81 @@ func TestAttachServiceAssemblyInjectsCommandsAndPreservesRootFallback(t *testing
 	}
 	if !rootRunCalled {
 		t.Fatal("expected original root Run to remain reachable through service root strategy")
+	}
+}
+
+func TestReinstallCommand_UsesDaemonFallback(t *testing.T) {
+	stub := &fakeDaemonService{status: service.StatusStopped}
+	sm := newTestServiceManager(t, stub)
+
+	cmd := sm.newReinstallCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+	if stub.uninstallCalled != 1 || stub.installCalled != 1 {
+		t.Fatalf("expected uninstall+install fallback, got uninstall=%d install=%d", stub.uninstallCalled, stub.installCalled)
+	}
+}
+
+func TestInstallCommand_ForceOverwritesExisting(t *testing.T) {
+	stub := &fakeDaemonService{status: service.StatusStopped}
+	sm := newTestServiceManager(t, stub)
+	sm.commands.config.service.Force = true
+
+	cmd := sm.newInstallCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("forced install: %v", err)
+	}
+	if stub.installCalled != 1 {
+		t.Fatalf("expected Install to run when Force is set, got %d", stub.installCalled)
+	}
+}
+
+func TestInstallCommand_AlreadyExistsSkipsInstall(t *testing.T) {
+	stub := &fakeDaemonService{status: service.StatusStopped}
+	sm := newTestServiceManager(t, stub)
+
+	cmd := sm.newInstallCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("install existing: %v", err)
+	}
+	if stub.installCalled != 0 {
+		t.Fatalf("expected install to be skipped when service exists, got %d", stub.installCalled)
+	}
+}
+
+func TestWrapServiceError_MapsDaemonSentinels(t *testing.T) {
+	sm := newTestServiceManager(t, &fakeDaemonService{})
+
+	cases := []struct {
+		name string
+		err  error
+		code ErrorCode
+	}{
+		{name: "permission", err: service.ErrPermission, code: ErrPermission},
+		{name: "already installed", err: service.ErrAlreadyInstalled, code: ErrServiceInstall},
+		{name: "invalid name", err: service.ErrInvalidName, code: ErrConfigInvalid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := sm.wrapServiceError(tc.err, ErrServiceInstall, "install")
+			if !IsErrorCode(wrapped, tc.code) {
+				t.Fatalf("expected %s, got %v", tc.code, wrapped)
+			}
+			if !errors.Is(wrapped, tc.err) {
+				t.Fatalf("expected errors.Is to keep %v", tc.err)
+			}
+		})
+	}
+}
+
+func TestBuilder_RejectsInvalidDaemonServiceName(t *testing.T) {
+	_, err := NewBuilder("en").
+		WithName("bad name").
+		WithService(func(ctx context.Context) error { return nil }).
+		BuildWithError()
+	if err == nil || !strings.Contains(err.Error(), "path separators") {
+		t.Fatalf("expected invalid name error, got %v", err)
 	}
 }
 

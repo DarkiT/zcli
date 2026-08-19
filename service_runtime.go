@@ -245,19 +245,30 @@ func (sm *sManager) rebuildServiceForRun(args []string) error {
 	return nil
 }
 
+func (sm *sManager) runArguments(args []string) []string {
+	if len(args) > 0 {
+		return args
+	}
+	if sm == nil || sm.commands == nil || sm.commands.config == nil || sm.commands.config.service == nil {
+		return args
+	}
+	if len(sm.commands.config.service.Arguments) == 0 {
+		return args
+	}
+	return sm.commands.config.service.Arguments
+}
+
 // executeRunCommand 执行运行命令，支持前台和服务模式
 func (sm *sManager) executeRunCommand(_ *cobra.Command, args []string) error {
 	// 如果服务正在运行，显示警告并退出
 	if sm.running.Load() {
 		sm.localizer.LogError("alreadyRunning", nil)
-		return nil
+		return NewError(ErrServiceRunning).Operation("run").Service(sm.Name()).Build()
 	}
 
-	// 处理运行参数
-	serviceArgs := args
-	if len(serviceArgs) == 0 && len(sm.commands.config.service.Arguments) > 0 {
-		serviceArgs = sm.commands.config.service.Arguments
-	}
+	serviceArgs := sm.runArguments(args)
+
+	_ = serviceArgs // keep nearby helper usage obvious for readers of executeRunCommand
 
 	sm.mu.Lock()
 	session := sm.newCommandSessionLocked()

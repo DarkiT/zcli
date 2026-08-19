@@ -42,7 +42,7 @@ func (r *uiRenderer) renderHelp(cc *cobra.Command, args []string) {
 	r.renderExamples(&buf, cc)
 	r.renderHelpHint(&buf, cc, cmdPath)
 
-	_, _ = fmt.Fprint(cc.OutOrStderr(), buf.String())
+	_, _ = fmt.Fprint(cc.OutOrStdout(), buf.String())
 }
 
 // renderLogo 渲染Logo部分
@@ -170,7 +170,7 @@ func (r *uiRenderer) groupCommands(cc *cobra.Command) ([]*cobra.Command, []*cobr
 
 	for _, cmd := range cc.Commands() {
 		if cmd.IsAvailableCommand() || cmd.Name() == "help" {
-			if _, isSystem := systemCmdOrder[cmd.Name()]; isSystem {
+			if isFrameworkServiceCommand(cmd) {
 				systemCmds = append(systemCmds, cmd)
 			} else {
 				normalCmds = append(normalCmds, cmd)

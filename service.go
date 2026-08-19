@@ -108,12 +108,12 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 	if config.Option == nil {
 		config.Option = make(service.KeyValue)
 	}
-	if _, ok := config.Option["RunWait"]; !ok {
+	if _, ok := config.Option[service.OptionRunWait]; !ok {
 		signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
 		if serviceManagerGOOS != "windows" {
 			signals = append(signals, syscall.SIGQUIT)
 		}
-		config.Option["RunWait"] = func() {
+		config.Option[service.OptionRunWait] = func() {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, signals...)
 			defer signal.Stop(sigCh)
@@ -127,13 +127,6 @@ func newServiceManager(cmd *Cli, ctx context.Context, cancel context.CancelFunc)
 			case <-ctx.Done():
 			}
 		}
-	}
-
-	if sm.commands.config.runtime.StartTimeout > 0 {
-		config.Timeout.Start = sm.commands.config.runtime.StartTimeout
-	}
-	if sm.commands.config.runtime.StopTimeout > 0 {
-		config.Timeout.Stop = sm.commands.config.runtime.StopTimeout
 	}
 
 	sm.config = config
@@ -239,6 +232,7 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 		ChRoot:            svcCfg.ChRoot,
 		EnvVars:           cloneStringMap(svcCfg.EnvVars),
 		AllowSudoFallback: svcCfg.AllowSudoFallback,
+		Force:             svcCfg.Force,
 	}
 	if svcCfg.Arguments != nil {
 		config.Arguments = append([]string(nil), svcCfg.Arguments...)
@@ -246,6 +240,21 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 	if svcCfg.Options != nil {
 		config.Option = make(service.KeyValue, len(svcCfg.Options))
 		maps.Copy(config.Option, svcCfg.Options)
+	}
+	if svcCfg.Notify {
+		if config.Option == nil {
+			config.Option = make(service.KeyValue)
+		}
+		config.Option[service.OptionNotify] = true
+	}
+	if rt := sm.commands.config.runtime; rt != nil {
+		config.Timeout = service.TimeoutConfig{
+			Start:   rt.StartTimeout,
+			Restart: rt.RestartTimeout,
+		}
+		if rt.daemonStopTimeoutSet {
+			config.Timeout.Stop = rt.StopTimeout
+		}
 	}
 
 	execPath := svcCfg.Executable
@@ -264,23 +273,31 @@ func (sm *sManager) createServiceConfig() (*service.Config, error) {
 	}
 	config.WorkingDirectory = workDir
 
-	if serviceManagerGOOS != "windows" {
-		if err := checkPermissions(config.Executable, 0o755, sm.localizer); err != nil {
-			return nil, fmt.Errorf("%s", sm.localizer.FormatError("execPermission", config.Executable, err))
-		}
-		if config.WorkingDirectory != "" {
-			if err := checkPermissions(config.WorkingDirectory, os.ModeDir|0o755, sm.localizer); err != nil {
-				return nil, fmt.Errorf("%s", sm.localizer.FormatError("workDirPermission", config.WorkingDirectory, err))
-			}
-		}
-		if config.ChRoot != "" {
-			if err := checkPermissions(config.ChRoot, os.ModeDir|0o755, sm.localizer); err != nil {
-				return nil, fmt.Errorf("%s", sm.localizer.FormatError("chrootPermission", config.ChRoot, err))
-			}
-		}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 
 	return config, nil
+}
+
+func (sm *sManager) verifyInstallPaths() error {
+	if sm == nil || sm.config == nil || serviceManagerGOOS == "windows" {
+		return nil
+	}
+	if err := checkPermissions(sm.config.Executable, 0o555, sm.localizer); err != nil {
+		return fmt.Errorf("%s", sm.localizer.FormatError("execPermission", sm.config.Executable, err))
+	}
+	if sm.config.WorkingDirectory != "" {
+		if err := checkPermissions(sm.config.WorkingDirectory, os.ModeDir|0o500, sm.localizer); err != nil {
+			return fmt.Errorf("%s", sm.localizer.FormatError("workDirPermission", sm.config.WorkingDirectory, err))
+		}
+	}
+	if sm.config.ChRoot != "" {
+		if err := checkPermissions(sm.config.ChRoot, os.ModeDir|0o500, sm.localizer); err != nil {
+			return fmt.Errorf("%s", sm.localizer.FormatError("chrootPermission", sm.config.ChRoot, err))
+		}
+	}
+	return nil
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

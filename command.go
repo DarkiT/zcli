@@ -2,7 +2,7 @@ package zcli
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -110,55 +110,17 @@ func (c *Cli) applyExecutionGlobals() func() {
 
 // Cli 是对 cobra.Command 的封装，提供更友好的命令行界面
 type Cli struct {
-	config  *Config
-	colors  *colors
-	lang    *Language
-	command *cobra.Command
+	config      *Config
+	colors      *colors
+	lang        *Language
+	command     *cobra.Command
+	assemblyErr error
 }
 
-// NewCli 创建一个新的命令对象
+// NewCli 创建一个新的命令对象。
+// 与 NewApp 共用同一条装配流水线，避免两套构造路径漂移。
 func NewCli(opts ...Option) *Cli {
-	cfg := NewConfig()
-	if len(opts) > 0 {
-		for _, opt := range opts {
-			opt(cfg)
-		}
-	}
-
-	syncCobraGlobals()
-
-	// 设置语言
-	if cfg.basic.Language != "" {
-		if err := SetLanguage(cfg.basic.Language); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "set language failed: %v\n", err)
-		}
-	}
-
-	cmd := &Cli{
-		config: cfg,
-		colors: newColors(),
-		lang:   GetLanguageManager().GetPrimary(),
-		command: &cobra.Command{
-			Use:           cfg.basic.Name, // 设置命令名称
-			SilenceErrors: cfg.basic.SilenceErrors,
-			SilenceUsage:  cfg.basic.SilenceUsage,
-		},
-	}
-
-	// 如果写了服务描述则把服务描述作为命令描述
-	if cmd.config.basic.Description != "" {
-		cmd.command.Short = cmd.config.basic.Description
-	}
-
-	// 设置版本信息
-	cmd.setupVersion()
-
-	// 配置服务（如果需要）
-	cmd.setupService()
-
-	// 添加根命令
-	cmd.addRootCommand(cmd.command)
-	return cmd
+	return NewApp(opts...)
 }
 
 // setupVersion 设置版本信息
@@ -190,13 +152,15 @@ func (c *Cli) setupVersion() {
 	}
 }
 
-// setupService 设置服务相关功能
-func (c *Cli) setupService() {
-	// 只有同时设置了 Name 和 Run 函数才初始化服务
-	if c.config.basic.Name != "" && c.config.runtime.Run != nil {
-		// 如果配置了服务名称和启动函数则初始化服务
-		c.initService()
+// setupService 设置服务相关功能。装配失败必须返回错误，不能只打日志。
+func (c *Cli) setupService() error {
+	if c == nil || c.config == nil || c.config.basic == nil || c.config.runtime == nil {
+		return nil
 	}
+	if c.config.basic.Name == "" || c.config.runtime.Run == nil {
+		return nil
+	}
+	return c.initService()
 }
 
 // ============================================================================
@@ -268,20 +232,88 @@ func (c *Cli) Context() context.Context {
 // 用于执行命令和控制命令执行流程
 // ============================================================================
 
+const (
+	// ExitSuccess 表示命令成功完成。
+	ExitSuccess = 0
+	// ExitFailure 表示通用执行失败。
+	ExitFailure = 1
+	// ExitUsage 表示配置或用法错误。
+	ExitUsage = 2
+)
+
+// ExitCode 将错误映射为进程退出码：成功为 0，用法/配置错误为 2，其余为 1。
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitSuccess
+	}
+
+	var buildErr *BuildError
+	if errors.As(err, &buildErr) {
+		return ExitUsage
+	}
+
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		return ExitUsage
+	}
+
+	var serviceErr *ServiceError
+	if errors.As(err, &serviceErr) {
+		switch serviceErr.Code {
+		case ErrConfigValidation, ErrConfigInvalid, ErrConfigMissing:
+			return ExitUsage
+		}
+	}
+
+	return ExitFailure
+}
+
+// Run 执行命令并返回进程退出码，适合 main 中 `os.Exit(app.Run())`。
+func (c *Cli) Run() int {
+	if c == nil {
+		return ExitFailure
+	}
+	if err := c.Execute(); err != nil {
+		return ExitCode(err)
+	}
+	return ExitSuccess
+}
+
+// Main 执行命令并以对应退出码结束进程。
+func (c *Cli) Main() {
+	os.Exit(c.Run())
+}
+
+func (c *Cli) readyError() error {
+	if c == nil || c.config == nil {
+		return errors.New("cli is not initialized")
+	}
+	return c.assemblyErr
+}
+
 // Execute 执行命令，这是启动应用程序的主要入口点
 func (c *Cli) Execute() error {
+	if err := c.readyError(); err != nil {
+		return err
+	}
 	return c.ExecuteContext(c.config.ctx)
 }
 
 // ExecuteC 执行命令并返回选中的命令
 // 主要用于需要访问选中命令的场景
 func (c *Cli) ExecuteC() (*Command, error) {
+	if err := c.readyError(); err != nil {
+		return nil, err
+	}
 	return c.ExecuteContextC(c.config.ctx)
 }
 
 // ExecuteContext 在指定的上下文中执行命令
 // 可用于传递取消信号或超时控制
 func (c *Cli) ExecuteContext(ctx context.Context) error {
+	if err := c.readyError(); err != nil {
+		return err
+	}
 	restore := c.applyExecutionGlobals()
 	defer restore()
 	return c.command.ExecuteContext(ctx)
@@ -289,6 +321,9 @@ func (c *Cli) ExecuteContext(ctx context.Context) error {
 
 // ExecuteContextC 在指定上下文中执行命令并返回选中的命令
 func (c *Cli) ExecuteContextC(ctx context.Context) (*Command, error) {
+	if err := c.readyError(); err != nil {
+		return nil, err
+	}
 	restore := c.applyExecutionGlobals()
 	defer restore()
 	return c.command.ExecuteContextC(ctx)

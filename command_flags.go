@@ -1,8 +1,6 @@
 package zcli
 
 import (
-	"fmt"
-
 	"github.com/spf13/pflag"
 )
 
@@ -134,23 +132,38 @@ func (c *Cli) GetAllFlagSets() []*FlagSet {
 	return flagSets
 }
 
-// GetBindableFlagSets 返回适用于绑定的标志集合，自动排除常见的系统标志
-// excludeFlags: 额外需要排除的标志名称
+// GetBindableFlagSets 返回去重后的可绑定标志集合，自动排除系统标志。
+// 同一标志只出现一次，避免 Viper 重复 BindPFlag。
 func (c *Cli) GetBindableFlagSets(excludeFlags ...string) []*FlagSet {
+	merged := c.mergeBindableFlags(excludeFlags...)
+	if merged == nil || !merged.HasFlags() {
+		return nil
+	}
+	return []*FlagSet{merged}
+}
+
+func (c *Cli) mergeBindableFlags(excludeFlags ...string) *FlagSet {
 	filter := newFlagFilter(excludeFlags...)
-	var filteredFlagSets []*FlagSet
-	allFlagSets := c.GetAllFlagSets()
+	merged := NewFlagSet("bindable")
+	seen := make(map[string]bool)
 
-	for i, flagSet := range allFlagSets {
-		filtered := filter.createFilteredFlagSet(flagSet, fmt.Sprintf("filtered-%d", i))
-
-		// 只有当过滤后的标志集不为空时才添加
-		if filtered.HasFlags() {
-			filteredFlagSets = append(filteredFlagSets, filtered)
+	add := func(source *FlagSet) {
+		if source == nil {
+			return
 		}
+		source.VisitAll(func(flag *Flag) {
+			if flag == nil || seen[flag.Name] || !filter.shouldInclude(flag.Name) {
+				return
+			}
+			seen[flag.Name] = true
+			merged.AddFlag(flag)
+		})
 	}
 
-	return filteredFlagSets
+	add(c.PersistentFlags())
+	add(c.Flags())
+	add(c.InheritedFlags())
+	return merged
 }
 
 // GetFilteredFlags 返回过滤后的单个标志集合，包含所有非排除的标志

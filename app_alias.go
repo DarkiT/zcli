@@ -19,7 +19,10 @@ func NewApp(opts ...Option) *App {
 		}
 	}
 	app := newAppBase(cfg)
-	app.applyBuilderAssembly(nil, nil)
+	if err := app.applyBuilderAssembly(nil, nil); err != nil {
+		app.assemblyErr = err
+		_, _ = fmt.Fprintf(os.Stderr, "assemble app failed: %v\n", err)
+	}
 	return app
 }
 

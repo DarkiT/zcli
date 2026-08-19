@@ -598,7 +598,7 @@ func TestNewCliWithNilConfigContextInitializesServiceCommands(t *testing.T) {
 		t.Fatal("expected cli command to be initialized")
 	}
 
-	for _, name := range []string{"run", "install", "uninstall", "start", "stop", "restart", "status"} {
+	for _, name := range []string{"run", "install", "reinstall", "uninstall", "start", "stop", "restart", "status"} {
 		cmd, _, err := cli.command.Find([]string{name})
 		if err != nil || cmd == nil || cmd.Name() != name {
 			t.Fatalf("expected service command %q to be registered, got cmd=%v err=%v", name, cmd, err)

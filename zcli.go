@@ -1,6 +1,7 @@
 package zcli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,14 +23,15 @@ var systemCmdOrder = map[string]int{
 	"restart":   5,
 	"install":   6,
 	"uninstall": 7,
+	"reinstall": 8,
 }
 
 // applyBuilderAssembly 统一收束 Builder 到 App/Cli 的装配顺序。
 // 顺序固定为：版本/基础 root → help/UI → init hooks → service commands。
-func (c *Cli) applyBuilderAssembly(pendingCmds []*Command, initHooks []InitHook) {
+func (c *Cli) applyBuilderAssembly(pendingCmds []*Command, initHooks []InitHook) error {
 	root := c.Command()
 	if root == nil {
-		return
+		return errors.New("root command is not initialized")
 	}
 
 	if len(pendingCmds) > 0 {
@@ -38,7 +40,11 @@ func (c *Cli) applyBuilderAssembly(pendingCmds []*Command, initHooks []InitHook)
 
 	c.configureRootCommand(root)
 	c.attachInitHooks(root, initHooks)
-	c.setupService()
+	if err := c.setupService(); err != nil {
+		c.assemblyErr = err
+		return err
+	}
+	return nil
 }
 
 // configureRootCommand 为根命令注入 help/UI/completion 等装配能力。
@@ -53,8 +59,8 @@ func (c *Cli) configureRootCommand(rootCmd *Command) {
 		color.NoColor = true
 	}
 
-	// 禁用默认的 completion 命令
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.CompletionOptions.DisableDefaultCmd = false
+	rootCmd.InitDefaultCompletionCmd()
 
 	// 使用 UI 渲染器覆盖帮助展示
 	renderer := newUIRenderer(c)

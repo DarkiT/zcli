@@ -1,6 +1,7 @@
 package zcli
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -115,6 +116,14 @@ func (sm *sManager) handleError(err error) error {
 }
 
 func (sm *sManager) wrapServiceError(err error, code ErrorCode, operation string) *ServiceError {
+	switch {
+	case errors.Is(err, service.ErrPermission):
+		code = ErrPermission
+	case errors.Is(err, service.ErrAlreadyInstalled):
+		code = ErrServiceInstall
+	case errors.Is(err, service.ErrInvalidName):
+		code = ErrConfigInvalid
+	}
 	return WrapServiceOperationError(err, code, operation, sm.Name())
 }
 

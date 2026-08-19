@@ -36,6 +36,12 @@ func TestCreateServiceConfig_PropagatesDaemonFields(t *testing.T) {
 		service.OptionRestart: "on-failure",
 	}
 	config.service.AllowSudoFallback = true
+	config.service.Force = true
+	config.service.Notify = true
+	config.runtime.StartTimeout = 11 * time.Second
+	config.runtime.StopTimeout = 22 * time.Second
+	config.runtime.RestartTimeout = 33 * time.Second
+	config.runtime.daemonStopTimeoutSet = true
 
 	cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
 	sm := &sManager{
@@ -62,6 +68,15 @@ func TestCreateServiceConfig_PropagatesDaemonFields(t *testing.T) {
 	}
 	if !svcConfig.AllowSudoFallback {
 		t.Fatal("expected AllowSudoFallback to be propagated")
+	}
+	if !svcConfig.Force {
+		t.Fatal("expected Force to be propagated")
+	}
+	if notify, _ := svcConfig.Option[service.OptionNotify].(bool); !notify {
+		t.Fatalf("expected OptionNotify to be set, got %#v", svcConfig.Option)
+	}
+	if svcConfig.Timeout != (service.TimeoutConfig{Start: 11 * time.Second, Stop: 22 * time.Second, Restart: 33 * time.Second}) {
+		t.Fatalf("expected Timeout to be propagated, got %#v", svcConfig.Timeout)
 	}
 	if got, want := svcConfig.Executable, "/opt/demo/bin/demo"; got != want {
 		t.Fatalf("expected executable %q, got %q", want, got)

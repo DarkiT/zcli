@@ -2,27 +2,32 @@ package zcli
 
 import (
 	"errors"
+	"strings"
 
 	service "github.com/darkit/daemon"
 	"github.com/spf13/cobra"
 )
 
+// ServiceCommandGroupID 标记由 zcli 注入的系统服务命令，避免按名字误伤用户命令。
+const ServiceCommandGroupID = "zcli-service"
+
+func isFrameworkServiceCommand(cmd *Command) bool {
+	return cmd != nil && cmd.GroupID == ServiceCommandGroupID
+}
+
 // initService 初始化服务
-func (c *Cli) initService() {
-	// 检查是否设置了服务运行函数
+func (c *Cli) initService() error {
 	if c.config.runtime.Run == nil {
-		return
+		return nil
 	}
 
-	// 创建服务管理器
 	sm, err := c.newServiceAssemblyManager()
 	if err != nil {
-		_, _ = c.colors.Error.Printf("%v\n", err)
-		return
+		return err
 	}
 
-	// 添加服务命令并配置根命令运行函数
 	c.attachServiceAssembly(sm)
+	return nil
 }
 
 // attachServiceAssembly 把 service command adapter 与 root run 策略一起挂到当前 CLI。
@@ -38,10 +43,20 @@ func (c *Cli) attachServiceAssembly(sm *sManager) {
 // addServiceCommands 添加服务管理命令。
 // 该阶段只负责命令树注入，不修改根命令默认运行策略。
 func (c *Cli) addServiceCommands(sm *sManager) {
-	// 向命令行应用添加服务管理命令
+	if !c.command.ContainsGroup(ServiceCommandGroupID) {
+		title := "System Commands"
+		if c.lang != nil && c.lang.UI.Commands.SystemCommands != "" {
+			title = c.lang.UI.Commands.SystemCommands
+		}
+		c.command.AddGroup(&Group{
+			ID:    ServiceCommandGroupID,
+			Title: title,
+		})
+	}
 	c.command.AddCommand(
 		sm.newRunCmd(),
 		sm.newInstallCmd(),
+		sm.newReinstallCmd(),
 		sm.newUninstallCmd(),
 		sm.newStartCmd(),
 		sm.newStopCmd(),
@@ -62,16 +77,51 @@ func (c *Cli) attachServiceRootRun(sm *sManager) {
 		case originalRun != nil:
 			originalRun(cmd, args)
 			return nil
-		default:
+		case c.shouldRunServiceOnRoot():
 			return sm.executeRunCommand(cmd, args)
+		default:
+			return cmd.Help()
 		}
 	}
 }
 
+func (c *Cli) shouldRunServiceOnRoot() bool {
+	if c == nil || c.config == nil || c.config.basic == nil {
+		return true
+	}
+	switch c.config.basic.RootAction {
+	case RootActionRun:
+		return true
+	case RootActionHelp:
+		return false
+	default:
+		return !c.hasUserCommands()
+	}
+}
+
+func (c *Cli) hasUserCommands() bool {
+	if c == nil || c.command == nil {
+		return false
+	}
+	for _, cmd := range c.command.Commands() {
+		if cmd.Name() == "help" || cmd.Name() == "completion" {
+			continue
+		}
+		if isFrameworkServiceCommand(cmd) {
+			continue
+		}
+		if cmd.IsAvailableCommand() || cmd.Name() == "help" {
+			return true
+		}
+	}
+	return false
+}
+
 func (sm *sManager) buildBaseCommand(use, short string) *cobra.Command {
 	return &cobra.Command{
-		Use:   use,
-		Short: short,
+		Use:     use,
+		Short:   short,
+		GroupID: ServiceCommandGroupID,
 	}
 }
 
@@ -99,6 +149,63 @@ func isNotInstalled(err error) bool {
 	return IsErrorCode(err, ErrServiceNotFound)
 }
 
+func optionEnabled(options ServiceOptions, key string) bool {
+	if options == nil {
+		return false
+	}
+	enabled, ok := options[key].(bool)
+	return ok && enabled
+}
+
+func (sm *sManager) shouldForceInstall() bool {
+	if sm == nil {
+		return false
+	}
+	if sm.commands != nil && sm.commands.config != nil && sm.commands.config.service != nil {
+		if sm.commands.config.service.Force || optionEnabled(sm.commands.config.service.Options, service.OptionForceInstall) {
+			return true
+		}
+	}
+	if sm.config != nil && (sm.config.Force || optionEnabled(sm.config.Option, service.OptionForceInstall)) {
+		return true
+	}
+	return false
+}
+
+func (sm *sManager) applyInstallForce() {
+	if sm == nil || sm.config == nil || !sm.shouldForceInstall() {
+		return
+	}
+	sm.config.Force = true
+	if sm.config.Option == nil {
+		sm.config.Option = make(service.KeyValue)
+	}
+	sm.config.Option[service.OptionForceInstall] = true
+}
+
+func isRecoverableStatusError(err error) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		msg := strings.ToLower(current.Error())
+		if strings.Contains(msg, "failed state") || strings.Contains(msg, "unknown status") {
+			return true
+		}
+	}
+	return false
+}
+
+func (sm *sManager) classifyServicePresence(status service.Status, err error) (notInstalled bool, hard error) {
+	if err == nil {
+		return status == service.StatusUnknown, nil
+	}
+	if isNotInstalled(err) || errors.Is(err, service.ErrNotInstalled) {
+		return true, nil
+	}
+	if isRecoverableStatusError(err) {
+		return false, nil
+	}
+	return false, err
+}
+
 // newInstallCmd 创建安装服务命令
 func (sm *sManager) newInstallCmd() *cobra.Command {
 	cmd := sm.buildBaseCommand("install", sm.localizer.GetOperation("install"))
@@ -114,18 +221,23 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 			}
 			sm.service = svc
 		}
-
-		// 检查服务是否已安装
-		status, statusErr := sm.queryServiceStatus()
-		if statusErr == nil && status != service.StatusUnknown {
-			sm.localizer.LogInfo(sm.commands.config.basic.Name, "alreadyExists")
-			return nil
-		}
-		if statusErr != nil && !isNotInstalled(statusErr) {
-			return statusErr
+		if err := sm.verifyInstallPaths(); err != nil {
+			return err
 		}
 
-		// 安装服务
+		if !sm.shouldForceInstall() {
+			status, statusErr := sm.queryServiceStatus()
+			notInstalled, hardErr := sm.classifyServicePresence(status, statusErr)
+			if hardErr != nil {
+				return hardErr
+			}
+			if !notInstalled {
+				sm.localizer.LogInfo(sm.commands.config.basic.Name, "alreadyExists")
+				return nil
+			}
+		}
+
+		sm.applyInstallForce()
 		if err = sm.service.Install(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceInstall, "install")
 		}
@@ -136,24 +248,42 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 	return cmd
 }
 
+func (sm *sManager) newReinstallCmd() *cobra.Command {
+	cmd := sm.buildBaseCommand("reinstall", sm.localizer.GetOperation("reinstall"))
+	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
+		if sm.service == nil {
+			svc, createErr := service.New(sm.buildRunner(), sm.config)
+			if createErr != nil {
+				return WrapError(createErr, ErrServiceCreate, "reinstall")
+			}
+			sm.service = svc
+		}
+		if err := sm.verifyInstallPaths(); err != nil {
+			return err
+		}
+		if err := service.Reinstall(sm.service); err != nil {
+			return sm.wrapServiceError(err, ErrServiceInstall, "reinstall")
+		}
+		sm.localizer.LogSuccess(sm.commands.config.basic.Name, "reinstall")
+		return nil
+	})
+	return cmd
+}
+
 // newUninstallCmd 创建卸载服务命令
 func (sm *sManager) newUninstallCmd() *cobra.Command {
 	cmd := sm.buildBaseCommand("uninstall", sm.localizer.GetOperation("uninstall"))
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
 		status, statusErr := sm.queryServiceStatus()
-		if statusErr == nil && status == service.StatusUnknown {
+		notInstalled, hardErr := sm.classifyServicePresence(status, statusErr)
+		if hardErr != nil {
+			return hardErr
+		}
+		if notInstalled {
 			sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
 			return nil
 		}
-		if statusErr != nil {
-			if isNotInstalled(statusErr) {
-				sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
-				return nil
-			}
-			return statusErr
-		}
 
-		// 卸载服务
 		if err := sm.service.Uninstall(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceUninstall, "uninstall")
 		}
@@ -170,16 +300,19 @@ func (sm *sManager) newStartCmd() *cobra.Command {
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
 		// 检查服务状态
 		status, err := sm.queryServiceStatus()
-		if err != nil {
-			return err
+		notInstalled, hardErr := sm.classifyServicePresence(status, err)
+		if hardErr != nil {
+			return hardErr
+		}
+		if notInstalled {
+			return ErrServiceNotInstalled(sm.commands.config.basic.Name)
 		}
 
-		if status == service.StatusRunning {
+		if err == nil && status == service.StatusRunning {
 			sm.localizer.LogInfo(sm.commands.config.basic.Name, "alreadyRunning")
 			return nil
 		}
 
-		// 启动服务
 		if err := sm.service.Start(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceStart, "start")
 		}
@@ -196,16 +329,20 @@ func (sm *sManager) newStopCmd() *cobra.Command {
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
 		// 检查服务状态
 		status, err := sm.queryServiceStatus()
-		if err != nil {
-			return err
+		notInstalled, hardErr := sm.classifyServicePresence(status, err)
+		if hardErr != nil {
+			return hardErr
+		}
+		if notInstalled {
+			sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
+			return nil
 		}
 
-		if status == service.StatusStopped {
+		if err == nil && status == service.StatusStopped {
 			sm.localizer.LogInfo(sm.commands.config.basic.Name, "alreadyStopped")
 			return nil
 		}
 
-		// 停止服务
 		if err := sm.service.Stop(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceStop, "stop")
 		}
@@ -222,23 +359,15 @@ func (sm *sManager) newRestartCmd() *cobra.Command {
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
 		// 检查服务状态
 		status, err := sm.queryServiceStatus()
-		if err != nil {
-			return err
+		notInstalled, hardErr := sm.classifyServicePresence(status, err)
+		if hardErr != nil {
+			return hardErr
 		}
-
-		if status == service.StatusUnknown {
+		if notInstalled {
 			return ErrServiceNotInstalled(sm.commands.config.basic.Name)
 		}
 
-		// 如果服务正在运行，先停止
-		if status == service.StatusRunning {
-			if err := sm.service.Stop(); err != nil {
-				return sm.wrapServiceError(err, ErrServiceStop, "restart")
-			}
-		}
-
-		// 启动服务
-		if err := sm.service.Start(); err != nil {
+		if err := sm.service.Restart(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceRestart, "restart")
 		}
 
@@ -254,25 +383,20 @@ func (sm *sManager) newStatusCmd() *cobra.Command {
 	cmd.RunE = sm.wrapRunE(func(cmd *cobra.Command, args []string) error {
 		// 获取服务状态
 		status, err := sm.queryServiceStatus()
-		if err != nil {
-			if isNotInstalled(err) {
-				sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
-				return nil
-			}
-			return err
+		notInstalled, hardErr := sm.classifyServicePresence(status, err)
+		if hardErr != nil {
+			return hardErr
+		}
+		if notInstalled {
+			sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
+			return nil
 		}
 
-		// 显示状态
-		switch status {
-		case service.StatusRunning:
-			sm.localizer.LogInfo(sm.commands.config.basic.Name, "running")
-		case service.StatusStopped:
-			sm.localizer.LogInfo(sm.commands.config.basic.Name, "stopped")
-		case service.StatusUnknown:
-			sm.localizer.LogInfo(sm.commands.config.basic.Name, "notInstalled")
-		default:
-			sm.localizer.LogInfo(sm.commands.config.basic.Name, "unknown")
+		if status == service.StatusUnknown {
+			sm.localizer.LogInfo(sm.commands.config.basic.Name, status.String())
+			return nil
 		}
+		sm.localizer.LogInfo(sm.commands.config.basic.Name, status.String())
 
 		return nil
 	})

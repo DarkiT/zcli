@@ -253,14 +253,12 @@ func (c *Cli) Command() *Command {
 	return c.command
 }
 
-// Config 返回配置的副本（用于调试）
-// 注意：返回的是副本，修改不会影响原配置
-func (c *Cli) Config() Config {
-	clone := Config{ctx: c.config.ctx}
-
+// Config 返回配置副本，修改不会影响内部状态。
+// 返回指针是为了让 app.Config().Basic() 这类链式访问合法。
+func (c *Cli) Config() *Config {
+	clone := &Config{ctx: c.config.ctx}
 	clone.basic = cloneBasicPtr(c.config.basic)
 	clone.service = cloneServicePtr(c.config.service)
 	clone.runtime = cloneRuntimePtr(c.config.runtime)
-
 	return clone
 }

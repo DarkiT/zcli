@@ -121,8 +121,8 @@ func TestAppAssemblyPipeline(t *testing.T) {
 		if app.command.Short != "app entry description" {
 			t.Fatalf("期望根命令短描述已装配，实际为 %q", app.command.Short)
 		}
-		if !app.command.CompletionOptions.DisableDefaultCmd {
-			t.Fatal("根命令应禁用 Cobra 默认 completion 命令")
+		if app.command.CompletionOptions.DisableDefaultCmd {
+			t.Fatal("根命令应保留标准 completion 命令")
 		}
 		if app.Command().HelpFunc() == nil {
 			t.Fatal("根命令应挂载 help 渲染函数")
@@ -152,7 +152,7 @@ func TestAppAssemblyPipeline(t *testing.T) {
 			t.Fatalf("BuildWithError 失败: %v", err)
 		}
 
-		for _, name := range []string{"run", "install", "uninstall", "start", "stop", "restart", "status"} {
+		for _, name := range []string{"run", "install", "reinstall", "uninstall", "start", "stop", "restart", "status"} {
 			cmd, _, findErr := app.Command().Find([]string{name})
 			if findErr != nil || cmd == nil || cmd.Name() != name {
 				t.Fatalf("期望命令 %q 已装配，cmd=%v err=%v", name, cmd, findErr)
