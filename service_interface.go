@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,25 @@ type Dependency = service.Dependency
 // ServiceOptions 对齐 daemon 的平台特定配置容器。
 type ServiceOptions = service.KeyValue
 
+const (
+	OptionRestart      = service.OptionRestart
+	OptionRestartSec   = service.OptionRestartSec
+	OptionRunWait      = service.OptionRunWait
+	OptionForceInstall = service.OptionForceInstall
+	OptionNotify       = service.OptionNotify
+	OptionLimitNOFILE  = service.OptionLimitNOFILE
+)
+
+var (
+	// After / Before / Require / Want 对齐 daemon 的依赖构造函数。
+	After   = service.After
+	Before  = service.Before
+	Require = service.Require
+	Want    = service.Want
+	// Ready 在 WithNotify(true) 后通知 systemd/Windows 服务已就绪。
+	Ready = service.Ready
+)
+
 // ServiceConfig 服务配置结构，提供完整的类型安全
 type ServiceConfig struct {
 	Name              string            `validate:"required"`
@@ -58,6 +78,8 @@ type ServiceConfig struct {
 	ChRoot            string
 	Options           ServiceOptions
 	AllowSudoFallback bool
+	Force             bool
+	Notify            bool
 }
 
 // Validate 验证配置的有效性
@@ -67,6 +89,8 @@ func (sc *ServiceConfig) Validate() error {
 	// 验证必需字段
 	if sc.Name == "" {
 		errs = append(errs, errors.New("service name is required"))
+	} else if strings.TrimSpace(sc.Name) != sc.Name || strings.ContainsAny(sc.Name, "/\\\x00\t\n\r ") {
+		errs = append(errs, errors.New("service name must not contain spaces or path separators"))
 	}
 	if len(sc.DisplayName) > 100 {
 		errs = append(errs, errors.New("display name must not exceed 100 characters"))
@@ -114,10 +138,18 @@ type ValidationError struct {
 }
 
 func (ve *ValidationError) Error() string {
+	if ve == nil || len(ve.Errors) == 0 {
+		return "configuration validation failed"
+	}
 	if len(ve.Errors) == 1 {
 		return fmt.Sprintf("configuration validation failed: %v", ve.Errors[0])
 	}
-	return fmt.Sprintf("configuration validation failed, %d error(s): %v", len(ve.Errors), ve.Errors[0])
+	var b strings.Builder
+	fmt.Fprintf(&b, "configuration validation failed, %d error(s):", len(ve.Errors))
+	for i, err := range ve.Errors {
+		fmt.Fprintf(&b, "\n  %d. %s", i+1, err.Error())
+	}
+	return b.String()
 }
 
 func (ve *ValidationError) Unwrap() []error {

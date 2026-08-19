@@ -27,6 +27,17 @@ func TestLanguageManagerUnknownPrimaryDefaultsToEnglish(t *testing.T) {
 	}
 }
 
+func TestServiceLocalizerGetErrorFallsBackToSystem(t *testing.T) {
+	localizer := NewServiceLocalizer(NewLanguageManager("en"), nil)
+	got := localizer.GetError("execPermission")
+	if got == "" || strings.HasPrefix(got, "[Missing:") {
+		t.Fatalf("system error should be used when service key is absent, got %q", got)
+	}
+	if !strings.Contains(got, "%s") {
+		t.Fatalf("expected system execPermission template, got %q", got)
+	}
+}
+
 func TestServiceLocalizerConfigureOutput(t *testing.T) {
 	manager := NewLanguageManager("en")
 	localizer := NewServiceLocalizer(manager, nil)

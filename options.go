@@ -14,18 +14,31 @@ type RunFunc func(ctx context.Context) error
 // 返回 error 用于报告停止过程中的错误
 type StopFunc func() error
 
+// RootAction 控制配置了服务时，无子命令调用根命令的默认行为。
+type RootAction string
+
+const (
+	// RootActionAuto 纯服务默认 run，存在用户子命令时默认 help。
+	RootActionAuto RootAction = ""
+	// RootActionRun 无子命令时直接前台运行服务。
+	RootActionRun RootAction = "run"
+	// RootActionHelp 无子命令时显示帮助。
+	RootActionHelp RootAction = "help"
+)
+
 // Basic 基础配置
 type Basic struct {
-	Name              string // 服务名称
-	DisplayName       string // 显示名称
-	Description       string // 服务描述
-	Version           string // 版本
-	Logo              string // Logo 路径
-	Language          string // 使用语言
-	MousetrapDisabled bool   // 禁用 Windows 双击运行提示
-	NoColor           bool   // 禁用彩色输出
-	SilenceErrors     bool   // 禁止打印错误
-	SilenceUsage      bool   // 禁止打印使用说明
+	Name              string     // 服务名称
+	DisplayName       string     // 显示名称
+	Description       string     // 服务描述
+	Version           string     // 版本
+	Logo              string     // Logo 路径
+	Language          string     // 使用语言
+	MousetrapDisabled bool       // 禁用 Windows 双击运行提示
+	NoColor           bool       // 禁用彩色输出
+	SilenceErrors     bool       // 禁止打印错误
+	SilenceUsage      bool       // 禁止打印使用说明
+	RootAction        RootAction // 根命令默认动作
 }
 
 // Runtime 运行时配置
@@ -40,10 +53,15 @@ type Runtime struct {
 	ShutdownGrace time.Duration
 	// StartTimeout 启动超时，写入 daemon Config.Timeout.Start
 	StartTimeout time.Duration
-	// StopTimeout 停止超时，写入 daemon Config.Timeout.Stop
+	// StopTimeout 进程内停止/强制退出超时，默认 20s。
+	// 只有通过 WithServiceTimeouts 显式设置时才会写入 daemon Config.Timeout.Stop。
 	StopTimeout time.Duration
+	// RestartTimeout 重启间隔，写入 daemon Config.Timeout.Restart
+	RestartTimeout time.Duration
 	// ErrorHandlers 错误处理器链
 	ErrorHandlers []ErrorHandler
+
+	daemonStopTimeoutSet bool
 }
 
 // Config 统一配置结构
@@ -204,6 +222,8 @@ func cloneService(src *ServiceConfig) ServiceConfig {
 		Executable:        src.Executable,
 		ChRoot:            src.ChRoot,
 		AllowSudoFallback: src.AllowSudoFallback,
+		Force:             src.Force,
+		Notify:            src.Notify,
 	}
 
 	if len(src.Arguments) > 0 {
@@ -242,12 +262,14 @@ func cloneRuntime(src *Runtime) Runtime {
 	}
 
 	dst := Runtime{
-		Run:             src.Run,
-		Stop:            src.Stop,
-		ShutdownInitial: src.ShutdownInitial,
-		ShutdownGrace:   src.ShutdownGrace,
-		StartTimeout:    src.StartTimeout,
-		StopTimeout:     src.StopTimeout,
+		Run:                  src.Run,
+		Stop:                 src.Stop,
+		ShutdownInitial:      src.ShutdownInitial,
+		ShutdownGrace:        src.ShutdownGrace,
+		StartTimeout:         src.StartTimeout,
+		StopTimeout:          src.StopTimeout,
+		RestartTimeout:       src.RestartTimeout,
+		daemonStopTimeoutSet: src.daemonStopTimeoutSet,
 	}
 
 	if len(src.ErrorHandlers) > 0 {

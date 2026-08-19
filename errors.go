@@ -217,6 +217,9 @@ func (eb *ErrorBuilder) Cause(cause error) *ErrorBuilder {
 
 // Context 添加上下文信息
 func (eb *ErrorBuilder) Context(key string, value any) *ErrorBuilder {
+	if eb.err.Context == nil {
+		eb.err.Context = make(map[string]any)
+	}
 	eb.err.Context[key] = value
 	return eb
 }
@@ -435,9 +438,12 @@ func (ea *ErrorAggregator) Count() int {
 	return len(ea.errors)
 }
 
-// Errors 返回所有错误
+// Errors 返回所有错误的副本，避免调用方修改内部切片。
 func (ea *ErrorAggregator) Errors() []error {
-	return ea.errors
+	if len(ea.errors) == 0 {
+		return nil
+	}
+	return append([]error(nil), ea.errors...)
 }
 
 // Error 返回聚合错误信息
@@ -467,15 +473,16 @@ func (ea *ErrorAggregator) Clear() {
 // 错误工具函数
 // =============================================================================
 
-// IsServiceError 检查是否为服务错误
+// IsServiceError 检查是否为服务错误（支持 error chain）。
 func IsServiceError(err error) bool {
-	_, ok := err.(*ServiceError)
-	return ok
+	var serviceErr *ServiceError
+	return errors.As(err, &serviceErr)
 }
 
-// GetServiceError 获取服务错误
+// GetServiceError 获取服务错误（支持 error chain）。
 func GetServiceError(err error) (*ServiceError, bool) {
-	if serviceErr, ok := err.(*ServiceError); ok {
+	var serviceErr *ServiceError
+	if errors.As(err, &serviceErr) {
 		return serviceErr, true
 	}
 	return nil, false
@@ -508,20 +515,7 @@ func WrapServiceOperationError(err error, code ErrorCode, operation, serviceName
 		Build()
 }
 
-// CombineErrors 合并多个错误
+// CombineErrors 合并多个错误，保留原始类型以便 errors.Is / errors.As。
 func CombineErrors(errs ...error) error {
-	aggregator := NewErrorAggregator()
-	for _, err := range errs {
-		aggregator.Add(err)
-	}
-
-	if !aggregator.HasErrors() {
-		return nil
-	}
-
-	if aggregator.Count() == 1 {
-		return aggregator.Errors()[0]
-	}
-
-	return errors.New(aggregator.Error())
+	return errors.Join(errs...)
 }

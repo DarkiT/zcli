@@ -75,16 +75,19 @@ func (lm *LanguageManager) GetPrimary() *Language {
 	return lm.primary
 }
 
-// GetText 智能获取文本，支持回退机制
-func (lm *LanguageManager) GetText(path string) string {
+// Lookup 返回路径对应文本；找不到时返回空字符串，不包装 Missing 标记。
+func (lm *LanguageManager) Lookup(path string) string {
 	if text := lm.getTextFromLanguage(lm.primary, path); text != "" {
 		return text
 	}
+	return lm.getTextFromLanguage(lm.fallback, path)
+}
 
-	if text := lm.getTextFromLanguage(lm.fallback, path); text != "" {
+// GetText 智能获取文本，支持回退机制
+func (lm *LanguageManager) GetText(path string) string {
+	if text := lm.Lookup(path); text != "" {
 		return text
 	}
-
 	return fmt.Sprintf("[Missing: %s]", path)
 }
 

@@ -5,19 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 )
 
+// CommandFactory 在 CLI 实例就绪后构造命令。
+// 用于需要读取 App/Config/Flag 导出能力的命令，避免 Build 后再 Find/Remove/Add。
+type CommandFactory func(app *Cli) *Command
+
+type flagSetup struct {
+	persistent bool
+	configure  func(flags *FlagSet)
+}
+
 // Builder CLI构建器 - 增强版
 type Builder struct {
-	config      *Config
-	cli         *Cli
-	pendingCmds []*Command
-	validators  []func(*Config) error
-	buildErrs   []error
-	built       bool
-	service     ServiceRunner // 新增：支持ServiceRunner接口
-	initHooks   []InitHook
+	config       *Config
+	cli          *Cli
+	pendingCmds  []*Command
+	cmdFactories []CommandFactory
+	flagSetups   []flagSetup
+	validators   []func(*Config) error
+	buildErrs    []error
+	built        bool
+	service      ServiceRunner
+	initHooks    []InitHook
 }
 
 // InitHook 在命令执行前执行的初始化钩子
@@ -67,11 +79,8 @@ func (b *Builder) WithDescription(desc string) *Builder {
 
 // WithVersion 设置版本
 func (b *Builder) WithVersion(version string) *Builder {
-	if b.config.runtime.BuildInfo == nil {
-		b.config.runtime.BuildInfo = NewVersion()
-	}
-	b.config.runtime.BuildInfo.Version = version
-	b.config.basic.Version = version // 同步更新基础配置
+	b.ensureBuildInfo().Version = version
+	b.config.basic.Version = version
 	return b
 }
 
@@ -119,6 +128,29 @@ func (b *Builder) WithCommand(cmd *Command) *Builder {
 	return b
 }
 
+// WithCommands 批量添加命令，语义与多次 WithCommand 相同。
+func (b *Builder) WithCommands(cmds ...*Command) *Builder {
+	for _, cmd := range cmds {
+		b.WithCommand(cmd)
+	}
+	return b
+}
+
+// WithCommandFactory 注册需要 *Cli 才能构造的命令。
+func (b *Builder) WithCommandFactory(factory CommandFactory) *Builder {
+	if factory == nil {
+		return b
+	}
+	if b.built && b.cli != nil {
+		if cmd := factory(b.cli); cmd != nil {
+			b.cli.AddCommand(cmd)
+		}
+		return b
+	}
+	b.cmdFactories = append(b.cmdFactories, factory)
+	return b
+}
+
 // WithInitHook 注册初始化钩子
 func (b *Builder) WithInitHook(hook InitHook) *Builder {
 	if hook != nil {
@@ -129,21 +161,16 @@ func (b *Builder) WithInitHook(hook InitHook) *Builder {
 
 // WithGitInfo 设置Git信息
 func (b *Builder) WithGitInfo(commitID, branch, tag string) *Builder {
-	if b.config.runtime.BuildInfo == nil {
-		b.config.runtime.BuildInfo = NewVersion()
-	}
-	b.config.runtime.BuildInfo.GitCommit = commitID
-	b.config.runtime.BuildInfo.GitBranch = branch
-	b.config.runtime.BuildInfo.GitTag = tag
+	info := b.ensureBuildInfo()
+	info.GitCommit = commitID
+	info.GitBranch = branch
+	info.GitTag = tag
 	return b
 }
 
 // WithDebug 设置调试模式
 func (b *Builder) WithDebug(debug bool) *Builder {
-	if b.config.runtime.BuildInfo == nil {
-		b.config.runtime.BuildInfo = NewVersion()
-	}
-	b.config.runtime.BuildInfo.Debug.Store(debug)
+	b.ensureBuildInfo().Debug.Store(debug)
 	return b
 }
 
@@ -178,21 +205,38 @@ func (b *Builder) WithChRoot(dir string) *Builder {
 	return b
 }
 
-// WithBuildTime 设置构建时间
+// WithBuildTime 设置构建时间。
+// 接受 time.DateTime 或 RFC3339；无法解析时累积到 BuildWithError，不再静默丢弃。
 func (b *Builder) WithBuildTime(buildTime string) *Builder {
-	parsedTime, err := time.Parse(time.DateTime, buildTime)
-	if err == nil {
-		b.config.runtime.BuildInfo.BuildTime = parsedTime
+	if buildTime == "" {
+		return b
 	}
+	parsedTime, err := parseBuildTime(buildTime)
+	if err != nil {
+		b.addBuildError(fmt.Errorf("invalid build time %q: %w", buildTime, err))
+		return b
+	}
+	b.ensureBuildInfo().BuildTime = parsedTime
 	return b
 }
 
 // WithEnvVar 设置环境变量
 func (b *Builder) WithEnvVar(key, value string) *Builder {
+	if key == "" {
+		return b
+	}
 	if b.config.service.EnvVars == nil {
 		b.config.service.EnvVars = make(map[string]string)
 	}
 	b.config.service.EnvVars[key] = value
+	return b
+}
+
+// WithEnvVars 批量合并环境变量，空 key 会被忽略。
+func (b *Builder) WithEnvVars(vars map[string]string) *Builder {
+	for key, value := range vars {
+		b.WithEnvVar(key, value)
+	}
 	return b
 }
 
@@ -217,10 +261,21 @@ func (b *Builder) WithLegacyDependencies(deps ...string) *Builder {
 	return b
 }
 
-// WithStructuredDependencies 设置结构化依赖。
+// WithStructuredDependencies 追加结构化依赖，语义与多次 WithDependency 相同。
+// 若要覆盖已有列表，使用 SetStructuredDependencies。
 func (b *Builder) WithStructuredDependencies(deps ...Dependency) *Builder {
-	b.config.service.StructuredDeps = append([]Dependency(nil), deps...)
 	b.config.service.Dependencies = nil
+	if len(deps) == 0 {
+		return b
+	}
+	b.config.service.StructuredDeps = append(b.config.service.StructuredDeps, deps...)
+	return b
+}
+
+// SetStructuredDependencies 覆盖结构化依赖列表。
+func (b *Builder) SetStructuredDependencies(deps ...Dependency) *Builder {
+	b.config.service.Dependencies = nil
+	b.config.service.StructuredDeps = append([]Dependency(nil), deps...)
 	return b
 }
 
@@ -267,8 +322,24 @@ func (b *Builder) WithAllowSudoFallback(enabled bool) *Builder {
 	return b
 }
 
+// WithForce 设置 Install 覆盖已有服务配置，对齐 daemon Config.Force。
+func (b *Builder) WithForce(enabled bool) *Builder {
+	b.config.service.Force = enabled
+	return b
+}
+
+// WithNotify 启用 systemd Type=notify / Windows 就绪通知。
+func (b *Builder) WithNotify(enabled bool) *Builder {
+	b.config.service.Notify = enabled
+	return b
+}
+
 // WithRuntime 设置运行时配置
 func (b *Builder) WithRuntime(rt *Runtime) *Builder {
+	if rt == nil {
+		b.addBuildError(errors.New("runtime cannot be nil"))
+		return b
+	}
 	b.config.runtime = rt
 	return b
 }
@@ -277,13 +348,20 @@ func (b *Builder) WithRuntime(rt *Runtime) *Builder {
 // run: 服务运行函数，标准签名 func(ctx context.Context) error
 // stop: 可选停止函数，标准签名 func() error
 func (b *Builder) WithService(run RunFunc, stop ...StopFunc) *Builder {
-	b.config.runtime.Run = run
-	if len(stop) > 0 {
-		b.config.runtime.Stop = stop[0]
-	} else {
-		b.config.runtime.Stop = nil
+	if run == nil {
+		b.addBuildError(errors.New("service run function cannot be nil"))
+		b.service = nil
+		b.ensureRuntime().Run = nil
+		b.ensureRuntime().Stop = nil
+		return b
 	}
-	// 重置 ServiceRunner，保持与新的 run/stop 同步
+	rt := b.ensureRuntime()
+	rt.Run = run
+	if len(stop) > 0 {
+		rt.Stop = stop[0]
+	} else {
+		rt.Stop = nil
+	}
 	b.service = nil
 	return b
 }
@@ -291,33 +369,41 @@ func (b *Builder) WithService(run RunFunc, stop ...StopFunc) *Builder {
 // WithServiceRunner 配置优雅的服务接口（推荐方式）
 func (b *Builder) WithServiceRunner(service ServiceRunner) *Builder {
 	if service == nil {
-		b.buildErrs = append(b.buildErrs, errors.New("service cannot be nil"))
+		b.addBuildError(errors.New("service cannot be nil"))
 		b.service = nil
-		b.config.runtime.Run = nil
-		b.config.runtime.Stop = nil
+		rt := b.ensureRuntime()
+		rt.Run = nil
+		rt.Stop = nil
 		return b
 	}
 	b.service = service
-
-	// 将 ServiceRunner 直接赋值为新的标准签名
-	b.config.runtime.Run = service.Run
-	b.config.runtime.Stop = service.Stop
-
+	rt := b.ensureRuntime()
+	rt.Run = service.Run
+	rt.Stop = service.Stop
 	return b
 }
 
 // WithShutdownTimeouts 配置优雅退出的分级超时时间
 // initial: 首次等待时长；grace: 调用停止函数后的额外等待时长
 func (b *Builder) WithShutdownTimeouts(initial, grace time.Duration) *Builder {
-	b.config.runtime.ShutdownInitial = initial
-	b.config.runtime.ShutdownGrace = grace
+	rt := b.ensureRuntime()
+	rt.ShutdownInitial = initial
+	rt.ShutdownGrace = grace
 	return b
 }
 
 // WithServiceTimeouts 配置服务启动/停止超时（写入 daemon Config.Timeout）
 func (b *Builder) WithServiceTimeouts(start, stop time.Duration) *Builder {
-	b.config.runtime.StartTimeout = start
-	b.config.runtime.StopTimeout = stop
+	rt := b.ensureRuntime()
+	rt.StartTimeout = start
+	rt.StopTimeout = stop
+	rt.daemonStopTimeoutSet = true
+	return b
+}
+
+// WithRestartTimeout 设置 daemon 重启间隔 Timeout.Restart。
+func (b *Builder) WithRestartTimeout(d time.Duration) *Builder {
+	b.ensureRuntime().RestartTimeout = d
 	return b
 }
 
@@ -330,44 +416,87 @@ func (b *Builder) WithMousetrapDisabled(disabled bool) *Builder {
 // WithErrorHandler 添加错误处理器
 func (b *Builder) WithErrorHandler(handler ErrorHandler) *Builder {
 	if handler != nil {
-		b.config.runtime.ErrorHandlers = append(b.config.runtime.ErrorHandlers, handler)
+		rt := b.ensureRuntime()
+		rt.ErrorHandlers = append(rt.ErrorHandlers, handler)
 	}
 	return b
 }
 
 // WithValidator 添加配置验证器
 func (b *Builder) WithValidator(validator func(*Config) error) *Builder {
+	if validator == nil {
+		return b
+	}
 	b.validators = append(b.validators, validator)
 	return b
 }
 
-// WithContext 设置名称
+// WithContext 设置构建与执行使用的根上下文。
 func (b *Builder) WithContext(ctx context.Context) *Builder {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	b.config.ctx = ctx
+	return b
+}
+
+// WithSilenceErrors 设置是否静默错误输出。
+func (b *Builder) WithSilenceErrors(enabled bool) *Builder {
+	b.config.basic.SilenceErrors = enabled
+	return b
+}
+
+// WithSilenceUsage 设置是否静默用法输出。
+func (b *Builder) WithSilenceUsage(enabled bool) *Builder {
+	b.config.basic.SilenceUsage = enabled
+	return b
+}
+
+// WithNoColor 设置是否禁用彩色输出。
+func (b *Builder) WithNoColor(enabled bool) *Builder {
+	b.config.basic.NoColor = enabled
+	return b
+}
+
+// WithRootAction 设置无子命令时根命令的默认动作。
+func (b *Builder) WithRootAction(action RootAction) *Builder {
+	b.config.basic.RootAction = action
+	return b
+}
+
+// WithPersistentFlags 在构建阶段配置根命令持久标志。
+func (b *Builder) WithPersistentFlags(configure func(flags *FlagSet)) *Builder {
+	return b.addFlagSetup(true, configure)
+}
+
+// WithFlags 在构建阶段配置根命令本地标志。
+func (b *Builder) WithFlags(configure func(flags *FlagSet)) *Builder {
+	return b.addFlagSetup(false, configure)
+}
+
+func (b *Builder) addFlagSetup(persistent bool, configure func(flags *FlagSet)) *Builder {
+	if configure == nil {
+		return b
+	}
+	if b.built && b.cli != nil {
+		if persistent {
+			configure(b.cli.PersistentFlags())
+		} else {
+			configure(b.cli.Flags())
+		}
+		return b
+	}
+	b.flagSetups = append(b.flagSetups, flagSetup{persistent: persistent, configure: configure})
 	return b
 }
 
 // Build 构建CLI实例
 func (b *Builder) Build() *Cli {
-	if b.built {
-		return b.cli
-	}
-
-	// 若使用 ServiceRunner，确保 runtime 与之同步
-	if b.service != nil {
-		b.config.runtime.Run = b.service.Run
-		b.config.runtime.Stop = b.service.Stop
-	}
-
-	// 执行验证
-	if err := b.validate(); err != nil {
+	cli, err := b.BuildWithError()
+	if err != nil {
 		panic(fmt.Sprintf("build failed: %v", err))
 	}
-
-	b.cli = b.finalizeCLI()
-
-	b.built = true
-	return b.cli
+	return cli
 }
 
 // BuildWithError 构建CLI实例，返回错误而不是panic
@@ -376,50 +505,159 @@ func (b *Builder) BuildWithError() (*Cli, error) {
 		return b.cli, nil
 	}
 
-	if b.service != nil {
-		b.config.runtime.Run = b.service.Run
-		b.config.runtime.Stop = b.service.Stop
-	}
+	b.syncServiceRuntime()
 
-	// 执行验证
 	if err := b.validate(); err != nil {
 		return nil, fmt.Errorf("build failed: %w", err)
 	}
 
-	b.cli = b.finalizeCLI()
-
+	cli, err := b.finalizeCLI()
+	if err != nil {
+		return nil, fmt.Errorf("build failed: %w", err)
+	}
+	b.cli = cli
 	b.built = true
 	return b.cli, nil
 }
 
-func (b *Builder) finalizeCLI() *Cli {
-	if b.cli == nil {
-		b.cli = newAppBase(b.config)
+func (b *Builder) syncServiceRuntime() {
+	if b.service == nil {
+		return
 	}
-	b.cli.applyBuilderAssembly(b.pendingCmds, b.initHooks)
+	rt := b.ensureRuntime()
+	rt.Run = b.service.Run
+	rt.Stop = b.service.Stop
+}
+
+func (b *Builder) finalizeCLI() (*Cli, error) {
+	cli := b.cli
+	if cli == nil {
+		cli = newAppBase(b.config)
+	}
+
+	pending := append([]*Command(nil), b.pendingCmds...)
+	for _, factory := range b.cmdFactories {
+		if factory == nil {
+			continue
+		}
+		if cmd := factory(cli); cmd != nil {
+			pending = append(pending, cmd)
+		}
+	}
+
+	for _, setup := range b.flagSetups {
+		if setup.configure == nil {
+			continue
+		}
+		if setup.persistent {
+			setup.configure(cli.PersistentFlags())
+		} else {
+			setup.configure(cli.Flags())
+		}
+	}
+
+	if err := cli.applyBuilderAssembly(pending, b.initHooks); err != nil {
+		return nil, err
+	}
+
 	b.pendingCmds = nil
+	b.cmdFactories = nil
+	b.flagSetups = nil
 	b.initHooks = nil
-	return b.cli
+	return cli, nil
+}
+
+func (b *Builder) ensureRuntime() *Runtime {
+	if b.config.runtime == nil {
+		b.config.runtime = &Runtime{
+			ShutdownInitial: 15 * time.Second,
+			ShutdownGrace:   5 * time.Second,
+			StopTimeout:     20 * time.Second,
+		}
+	}
+	return b.config.runtime
+}
+
+func (b *Builder) ensureBuildInfo() *VersionInfo {
+	rt := b.ensureRuntime()
+	if rt.BuildInfo == nil {
+		rt.BuildInfo = NewVersion()
+	}
+	return rt.BuildInfo
+}
+
+func (b *Builder) addBuildError(err error) {
+	if err != nil {
+		b.buildErrs = append(b.buildErrs, err)
+	}
+}
+
+func (b *Builder) syncServiceIdentity() {
+	if b.config == nil || b.config.service == nil || b.config.basic == nil {
+		return
+	}
+	if b.config.service.Name == "" {
+		b.config.service.Name = b.config.basic.Name
+	}
+	if b.config.service.DisplayName == "" {
+		b.config.service.DisplayName = b.config.basic.DisplayName
+	}
+	if b.config.service.Description == "" {
+		b.config.service.Description = b.config.basic.Description
+	}
+	if b.config.service.Version == "" {
+		b.config.service.Version = b.config.basic.Version
+	}
+}
+
+func parseBuildTime(value string) (time.Time, error) {
+	for _, layout := range []string{time.DateTime, time.RFC3339, time.RFC3339Nano} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("must be %q or RFC3339", time.DateTime)
 }
 
 // validate 验证配置
 func (b *Builder) validate() error {
 	var errs []error
 
-	// 基本验证
+	if b.config == nil || b.config.basic == nil {
+		errs = append(errs, errors.New("application configuration is required"))
+		return &BuildError{Errors: append(errs, b.buildErrs...)}
+	}
+
 	if b.config.basic.Name == "" {
 		errs = append(errs, errors.New("application name is required"))
+	} else if strings.TrimSpace(b.config.basic.Name) != b.config.basic.Name ||
+		strings.ContainsAny(b.config.basic.Name, "/\\\x00\t\n\r ") {
+		errs = append(errs, errors.New("application name must not contain spaces or path separators"))
 	}
 
 	errs = append(errs, b.buildErrs...)
 
-	// 服务相关验证
-	if b.config.runtime.Run != nil && b.config.basic.Name == "" {
-		errs = append(errs, errors.New("service name must be set when service is configured"))
+	if rt := b.config.runtime; rt != nil {
+		if rt.ShutdownInitial < 0 || rt.ShutdownGrace < 0 {
+			errs = append(errs, errors.New("shutdown timeouts cannot be negative"))
+		}
+		if rt.StartTimeout < 0 || rt.StopTimeout < 0 || rt.RestartTimeout < 0 {
+			errs = append(errs, errors.New("service timeouts cannot be negative"))
+		}
+		if rt.Run != nil {
+			b.syncServiceIdentity()
+			if b.config.service != nil {
+				if err := b.config.service.Validate(); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
 	}
 
-	// 执行自定义验证器
 	for i, validator := range b.validators {
+		if validator == nil {
+			continue
+		}
 		if err := validator(b.config); err != nil {
 			errs = append(errs, fmt.Errorf("validator %d failed: %w", i+1, err))
 		}
@@ -428,7 +666,6 @@ func (b *Builder) validate() error {
 	if len(errs) > 0 {
 		return &BuildError{Errors: errs}
 	}
-
 	return nil
 }
 
@@ -438,13 +675,24 @@ type BuildError struct {
 }
 
 func (be *BuildError) Error() string {
+	if be == nil || len(be.Errors) == 0 {
+		return "build failed"
+	}
 	if len(be.Errors) == 1 {
 		return be.Errors[0].Error()
 	}
-	return fmt.Sprintf("build failed, %d error(s): %v", len(be.Errors), be.Errors[0])
+	var b strings.Builder
+	fmt.Fprintf(&b, "build failed, %d error(s):", len(be.Errors))
+	for i, err := range be.Errors {
+		fmt.Fprintf(&b, "\n  %d. %s", i+1, err.Error())
+	}
+	return b.String()
 }
 
 func (be *BuildError) Unwrap() []error {
+	if be == nil {
+		return nil
+	}
 	return be.Errors
 }
 

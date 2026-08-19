@@ -30,67 +30,51 @@
 //	package main
 //
 //	import (
+//	    "context"
 //	    "log/slog"
 //	    "os"
-//	    "time"
 //
 //	    "github.com/darkit/zcli"
 //	)
 //
-//	var isRunning = true
-//
 //	func main() {
 //	    workDir, _ := os.UserHomeDir()
-//	    app := zcli.NewBuilder("zh").
-//	        WithName("myapp").
-//	        WithDisplayName("我的应用").
-//	        WithDescription("这是一个示例应用").
-//	        WithVersion("1.0.0").
+//	    app, err := zcli.NewBuilder("zh").
+//	        WithQuickConfig("myapp", "我的应用", "这是一个示例应用", "1.0.0").
 //	        WithWorkDir(workDir).
 //	        WithService(run, stop).
-//	        Build()
-//
-//	    // 执行应用
-//	    if err := app.Execute(); err != nil {
+//	        BuildWithError()
+//	    if err != nil {
 //	        slog.Error(err.Error())
+//	        os.Exit(zcli.ExitUsage)
 //	    }
+//	    os.Exit(app.Run())
 //	}
 //
-//	func run() {
+//	func run(ctx context.Context) error {
 //	    slog.Info("服务已启动")
-//	    isRunning = true
-//	    ticker := time.NewTicker(time.Second)
-//	    defer ticker.Stop()
-//
-//	    for range ticker.C {
-//	        if !isRunning {
-//	            break
-//	        }
-//	        slog.Info("服务正在运行...")
-//	    }
+//	    <-ctx.Done()
+//	    return nil
 //	}
 //
-//	func stop() {
-//	    slog.Warn("服务停止中...")
-//	    isRunning = false
+//	func stop() error {
 //	    slog.Info("服务已停止")
+//	    return nil
 //	}
 //
 // 主要结构:
 //
 // Builder: CLI构建器，使用链式调用方式配置应用
 //
-//	app := zcli.NewBuilder("zh").
+//	app, err := zcli.NewBuilder("zh").
 //	    WithName("myapp").
 //	    WithService(run, stop).
-//	    Build()
+//	    BuildWithError()
 //
 // Cli: 命令行应用对象，封装了cobra.Command
 //
-//	// 添加命令
 //	app.AddCommand(myCommand)
-//	// 执行应用
-//	app.Execute()
+//	os.Exit(app.Run())
 //
 // Config: 应用配置，包含基本信息、运行时配置和服务配置
 //
@@ -98,7 +82,7 @@
 //
 // Command: 命令定义，等同于cobra.Command
 //
-// 最低Go版本要求: 1.24 (见 go.mod)
+// 最低Go版本要求: 以 go.mod 为准（当前为 1.25.0）
 //
 // 更多信息和示例请参考: https://github.com/darkit/zcli
 package zcli

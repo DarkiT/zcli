@@ -63,12 +63,10 @@ func (sl *ServiceLocalizer) GetStatus(status string) string {
 
 // GetError 获取错误文本
 func (sl *ServiceLocalizer) GetError(errorType string) string {
-	path := fmt.Sprintf("error.service.%s", errorType)
-	if text := sl.manager.GetText(path); text != "" {
+	if text := sl.manager.Lookup(fmt.Sprintf("error.service.%s", errorType)); text != "" {
 		return text
 	}
-	path = fmt.Sprintf("error.system.%s", errorType)
-	return sl.manager.GetText(path)
+	return sl.manager.GetText(fmt.Sprintf("error.system.%s", errorType))
 }
 
 // GetFormat 获取格式化模板

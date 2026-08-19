@@ -8,6 +8,7 @@ func newChineseLanguage() *Language {
 		Service: ServiceDomain{
 			Operations: ServiceOperations{
 				Install:   "安装服务",
+				Reinstall: "覆盖重装服务",
 				Uninstall: "卸载服务",
 				Start:     "启动服务",
 				Stop:      "停止服务",
@@ -27,6 +28,7 @@ func newChineseLanguage() *Language {
 			},
 			Messages: ServiceMessages{
 				Installing:     "正在安装服务...",
+				Reinstalling:   "正在覆盖重装服务...",
 				Uninstalling:   "正在卸载服务...",
 				Starting:       "正在启动服务...",
 				Stopping:       "正在停止服务...",
@@ -108,6 +110,7 @@ func newEnglishLanguage() *Language {
 		Service: ServiceDomain{
 			Operations: ServiceOperations{
 				Install:   "Install Service",
+				Reinstall: "Reinstall Service",
 				Uninstall: "Uninstall Service",
 				Start:     "Start Service",
 				Stop:      "Stop Service",
@@ -127,6 +130,7 @@ func newEnglishLanguage() *Language {
 			},
 			Messages: ServiceMessages{
 				Installing:     "Installing service...",
+				Reinstalling:   "Reinstalling service...",
 				Uninstalling:   "Uninstalling service...",
 				Starting:       "Starting service...",
 				Stopping:       "Stopping service...",

@@ -116,6 +116,41 @@ func WithCommandSubcommands(children ...*Command) CommandOption {
 	}
 }
 
+// WithCommandHidden 将命令标记为隐藏，不出现在帮助列表中。
+func WithCommandHidden(hidden bool) CommandOption {
+	return func(cmd *Command) {
+		cmd.Hidden = hidden
+	}
+}
+
+// WithCommandSilenceUsage 设置命令失败时是否静默用法输出。
+func WithCommandSilenceUsage(enabled bool) CommandOption {
+	return func(cmd *Command) {
+		cmd.SilenceUsage = enabled
+	}
+}
+
+// WithCommandSilenceErrors 设置命令失败时是否静默错误输出。
+func WithCommandSilenceErrors(enabled bool) CommandOption {
+	return func(cmd *Command) {
+		cmd.SilenceErrors = enabled
+	}
+}
+
+// WithCommandPreRunE 设置命令级 PreRunE 钩子。
+func WithCommandPreRunE(preRunE func(cmd *Command, args []string) error) CommandOption {
+	return func(cmd *Command) {
+		cmd.PreRunE = preRunE
+	}
+}
+
+// WithCommandPersistentPreRunE 设置命令级 PersistentPreRunE 钩子。
+func WithCommandPersistentPreRunE(preRunE func(cmd *Command, args []string) error) CommandOption {
+	return func(cmd *Command) {
+		cmd.PersistentPreRunE = preRunE
+	}
+}
+
 // ExactArgs 返回“参数数量必须精确匹配”的校验器。
 func ExactArgs(n int) PositionalArgs {
 	return cobra.ExactArgs(n)
