@@ -40,17 +40,17 @@ type serviceRunSession struct {
 // errorHandlers 由 handlersMu 单独保护：handleError 会在错误路径遍历它，
 // 与 mu 解耦可避免锁嵌套。
 type sManager struct {
-	commands       *Cli
-	localizer      *ServiceLocalizer
-	mu             sync.RWMutex
-	session        *serviceRunSession
-	config         *service.Config
-	service        service.Service
-	exitChan       chan struct{}
-	running        atomic.Bool
-	stopExecuted   atomic.Bool
-	stopFuncOnce   atomic.Bool
-	forceExitOnce  atomic.Bool
+	commands      *Cli
+	localizer     *ServiceLocalizer
+	mu            sync.RWMutex
+	session       *serviceRunSession
+	config        *service.Config
+	service       service.Service
+	exitChan      chan struct{}
+	running       atomic.Bool
+	stopExecuted  atomic.Bool
+	stopFuncOnce  atomic.Bool
+	forceExitOnce atomic.Bool
 	// stopRequested / stopCause 承载「尚未兑现的停止意图」，归 mu 保护。
 	//
 	// 存在理由：Stop 取消的是调用那一刻的 session。若此时还没有运行中的服务
@@ -60,8 +60,8 @@ type sManager struct {
 	//
 	// 反过来，若 Stop 时确有服务在运行，意图立即通过 cancel 兑现，标志随之
 	// 清除——否则 restart（stop 后紧接 start）会被上一次的停止意图吞掉。
-	stopRequested bool
-	stopCause     error
+	stopRequested  bool
+	stopCause      error
 	forceExitTimer *time.Timer
 	errorHandlers  []ErrorHandler
 	handlersMu     sync.RWMutex
