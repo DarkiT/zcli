@@ -193,7 +193,9 @@ func (b *Builder) WithExecutable(path string) *Builder {
 }
 
 // WithArguments 设置系统服务运行参数。
-// 传入空参数列表会显式清空默认的 "run" 参数。
+// 注意：不设置、或传入空参数列表时，服务启动参数都是默认的 ["run"]。
+// 空列表会落成 nil，而装配层只在非 nil 时覆盖（见 service.go 的 createServiceConfig），
+// 所以这里没有「清空启动参数」的能力。
 func (b *Builder) WithArguments(args ...string) *Builder {
 	b.config.service.Arguments = append([]string(nil), args...)
 	return b
