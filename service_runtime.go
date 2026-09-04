@@ -171,9 +171,15 @@ func (sm *sManager) Run(externalCtx context.Context) error {
 		}
 	}
 
-	// 等待退出信号或上下文取消
+	// 等待退出信号或上下文取消。
+	// exitChan 归 mu 管：先取快照再等待，否则字段替换（Run 开头）与这里的
+	// select 求值会构成 data race。
+	sm.mu.RLock()
+	exitCh := sm.exitChan
+	sm.mu.RUnlock()
+
 	select {
-	case <-sm.exitChan:
+	case <-exitCh:
 	case <-runCtx.Done():
 	}
 
@@ -200,12 +206,17 @@ func (sm *sManager) stopWithCause(cause error, callUserStop bool) error {
 	}
 	sm.stopExecuted.Store(true)
 
+	// session 归 mu 管。这里只取快照，取消动作一律放到锁外执行，
+	// 避免持锁调用用户代码或触发 context 级联回调。
+	// 锁序与 Run 一致（stopMu → mu），不会形成 ABBA。
+	sm.mu.Lock()
 	var serviceCancel context.CancelCauseFunc
 	var commandCancel context.CancelCauseFunc
 	if sm.session != nil {
 		serviceCancel = sm.session.serviceCancel
 		commandCancel = sm.session.commandCancel
 	}
+	sm.mu.Unlock()
 	sm.stopMu.Unlock()
 
 	sm.scheduleForceExit(sm.commands.config.runtime.StopTimeout)
@@ -241,6 +252,7 @@ func (sm *sManager) rebuildServiceForRun(args []string) error {
 		sm.localizer.LogError("createService", err)
 		return WrapError(err, ErrServiceCreate, "run")
 	}
+	// 调用方已持有 sm.mu（executeRunCommand 的临界区），此处直接赋值，不可再加锁
 	sm.service = svc
 	return nil
 }
@@ -301,8 +313,15 @@ func (sm *sManager) executeRunCommand(_ *cobra.Command, args []string) error {
 			}
 		}()
 
-		// 启动服务 - 这会调用用户的Run函数
-		if err := sm.service.Run(); err != nil {
+		// 启动服务 - 这会调用用户的Run函数。
+		// 用快照而非裸读字段：install/reinstall 会替换 sm.service，
+		// 并发下裸读可能取到已被置 nil 的实例。
+		svc := sm.currentService()
+		if svc == nil {
+			runErrCh <- NewError(ErrServiceCreate).Operation("run").Service(sm.Name()).Build()
+			return
+		}
+		if err := svc.Run(); err != nil {
 			runErrCh <- err
 		}
 	}()

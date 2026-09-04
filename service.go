@@ -33,6 +33,12 @@ type serviceRunSession struct {
 	serviceCancel context.CancelCauseFunc
 }
 
+// sManager 的共享状态由 sm.mu 统一保护：session、exitChan、service、
+// runnerDone/runnerErr、forceExitTimer。stopMu 只串行化停止流程本身，
+// 它不拥有任何字段——需要读 session 时必须在 stopMu 内再取 mu 快照。
+//
+// errorHandlers 由 handlersMu 单独保护：handleError 会在错误路径遍历它，
+// 与 mu 解耦可避免锁嵌套。
 type sManager struct {
 	commands       *Cli
 	localizer      *ServiceLocalizer
@@ -47,9 +53,24 @@ type sManager struct {
 	forceExitOnce  atomic.Bool
 	forceExitTimer *time.Timer
 	errorHandlers  []ErrorHandler
+	handlersMu     sync.RWMutex
 	stopMu         sync.Mutex
 	runnerDone     chan struct{}
 	runnerErr      chan error
+}
+
+// currentService 返回当前 service 实例快照，供命令路径在锁外使用。
+func (sm *sManager) currentService() service.Service {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.service
+}
+
+// setService 替换当前 service 实例。
+func (sm *sManager) setService(svc service.Service) {
+	sm.mu.Lock()
+	sm.service = svc
+	sm.mu.Unlock()
 }
 
 // newServiceAssemblyManager 为 Cli 装配 service 能力。

@@ -99,9 +99,12 @@ func checkPermissions(path string, requiredPerm os.FileMode, localizer *ServiceL
 
 // AddErrorHandler 添加错误处理器
 func (sm *sManager) AddErrorHandler(handler ErrorHandler) {
-	if handler != nil {
-		sm.errorHandlers = append(sm.errorHandlers, handler)
+	if handler == nil {
+		return
 	}
+	sm.handlersMu.Lock()
+	sm.errorHandlers = append(sm.errorHandlers, handler)
+	sm.handlersMu.Unlock()
 }
 
 // handleError 通过错误处理器链处理错误
@@ -109,7 +112,14 @@ func (sm *sManager) handleError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, handler := range sm.errorHandlers {
+	// 先复制快照再释放锁：不在持锁状态下调用用户处理器，
+	// 既避免处理器内再注册导致死锁，也缩短临界区。
+	sm.handlersMu.RLock()
+	handlers := make([]ErrorHandler, len(sm.errorHandlers))
+	copy(handlers, sm.errorHandlers)
+	sm.handlersMu.RUnlock()
+
+	for _, handler := range handlers {
 		err = handler.HandleError(err)
 	}
 	return err

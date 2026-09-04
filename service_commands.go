@@ -140,7 +140,7 @@ func (sm *sManager) applyInstallArguments(args []string) error {
 		sm.config = cfg
 	}
 	sm.config.Arguments = append([]string(nil), args...)
-	sm.service = nil // 新参数需在 service.New 时生效
+	sm.setService(nil) // 新参数需在 service.New 时生效
 	return nil
 }
 
@@ -153,15 +153,30 @@ func (sm *sManager) wrapRunE(runE func(*cobra.Command, []string) error) func(*co
 	}
 }
 
+// serviceOrError 取当前 service 实例快照；实例缺失时返回统一错误。
+// install/reinstall 会先把实例置 nil 再重建，命令路径必须走快照，
+// 否则并发下会裸读到 nil 而 panic。
+func (sm *sManager) serviceOrError(operation string) (service.Service, error) {
+	svc := sm.currentService()
+	if svc == nil {
+		return nil, NewError(ErrServiceCreate).Operation(operation).Service(sm.Name()).Build()
+	}
+	return svc, nil
+}
+
 func (sm *sManager) queryServiceStatus() (service.Status, error) {
-	status, err := sm.service.Status()
-	if err == nil {
+	svc, err := sm.serviceOrError("status")
+	if err != nil {
+		return service.StatusUnknown, err
+	}
+	status, statusErr := svc.Status()
+	if statusErr == nil {
 		return status, nil
 	}
-	if errors.Is(err, service.ErrNotInstalled) {
-		return status, ErrServiceNotInstalled(sm.Name()).WithCause(err)
+	if errors.Is(statusErr, service.ErrNotInstalled) {
+		return status, ErrServiceNotInstalled(sm.Name()).WithCause(statusErr)
 	}
-	return status, sm.wrapServiceError(err, ErrServiceStatus, "status")
+	return status, sm.wrapServiceError(statusErr, ErrServiceStatus, "status")
 }
 
 func isNotInstalled(err error) bool {
@@ -238,15 +253,14 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 			return err
 		}
 		// 检查权限
-		var err error
 
 		// 创建服务实例
-		if sm.service == nil {
+		if sm.currentService() == nil {
 			svc, createErr := service.New(sm.buildRunner(), sm.config)
 			if createErr != nil {
 				return WrapError(createErr, ErrServiceCreate, "install")
 			}
-			sm.service = svc
+			sm.setService(svc)
 		}
 		if err := sm.verifyInstallPaths(); err != nil {
 			return err
@@ -264,8 +278,12 @@ func (sm *sManager) newInstallCmd() *cobra.Command {
 			}
 		}
 
+		svc, createErr := sm.serviceOrError("install")
+		if createErr != nil {
+			return createErr
+		}
 		sm.applyInstallForce()
-		if err = sm.service.Install(); err != nil {
+		if err := svc.Install(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceInstall, "install")
 		}
 
@@ -284,17 +302,21 @@ func (sm *sManager) newReinstallCmd() *cobra.Command {
 		if err := sm.applyInstallArguments(args); err != nil {
 			return err
 		}
-		if sm.service == nil {
+		if sm.currentService() == nil {
 			svc, createErr := service.New(sm.buildRunner(), sm.config)
 			if createErr != nil {
 				return WrapError(createErr, ErrServiceCreate, "reinstall")
 			}
-			sm.service = svc
+			sm.setService(svc)
 		}
 		if err := sm.verifyInstallPaths(); err != nil {
 			return err
 		}
-		if err := service.Reinstall(sm.service); err != nil {
+		svc, createErr := sm.serviceOrError("reinstall")
+		if createErr != nil {
+			return createErr
+		}
+		if err := service.Reinstall(svc); err != nil {
 			return sm.wrapServiceError(err, ErrServiceInstall, "reinstall")
 		}
 		sm.localizer.LogSuccess(sm.commands.config.basic.Name, "reinstall")
@@ -317,7 +339,11 @@ func (sm *sManager) newUninstallCmd() *cobra.Command {
 			return nil
 		}
 
-		if err := sm.service.Uninstall(); err != nil {
+		svc, svcErr := sm.serviceOrError("uninstall")
+		if svcErr != nil {
+			return svcErr
+		}
+		if err := svc.Uninstall(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceUninstall, "uninstall")
 		}
 
@@ -346,7 +372,11 @@ func (sm *sManager) newStartCmd() *cobra.Command {
 			return nil
 		}
 
-		if err := sm.service.Start(); err != nil {
+		svc, svcErr := sm.serviceOrError("start")
+		if svcErr != nil {
+			return svcErr
+		}
+		if err := svc.Start(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceStart, "start")
 		}
 
@@ -376,7 +406,11 @@ func (sm *sManager) newStopCmd() *cobra.Command {
 			return nil
 		}
 
-		if err := sm.service.Stop(); err != nil {
+		svc, svcErr := sm.serviceOrError("stop")
+		if svcErr != nil {
+			return svcErr
+		}
+		if err := svc.Stop(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceStop, "stop")
 		}
 
@@ -400,7 +434,11 @@ func (sm *sManager) newRestartCmd() *cobra.Command {
 			return ErrServiceNotInstalled(sm.commands.config.basic.Name)
 		}
 
-		if err := sm.service.Restart(); err != nil {
+		svc, svcErr := sm.serviceOrError("restart")
+		if svcErr != nil {
+			return svcErr
+		}
+		if err := svc.Restart(); err != nil {
 			return sm.wrapServiceError(err, ErrServiceRestart, "restart")
 		}
 
