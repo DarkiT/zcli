@@ -239,9 +239,14 @@ func (sm *sManager) stopWithCause(cause error, callUserStop bool) error {
 		sm.stopCause = cause
 	}
 	sm.mu.Unlock()
+
+	// 强制退出定时器必须排在 stopMu 临界区内：Run 的启动同样要持有 stopMu，
+	// 这保证「排定时器」一定先于「Run 收尾时的 cancelForceExit」。
+	// 若放在临界区外，Run 可能在定时器排布之前就收尾——取消动作空跑，
+	// 随后排下的定时器再没人取消，最终误触发强制退出（杀掉正常进程）。
+	sm.scheduleForceExit(sm.commands.config.runtime.StopTimeout)
 	sm.stopMu.Unlock()
 
-	sm.scheduleForceExit(sm.commands.config.runtime.StopTimeout)
 	if serviceCancel != nil {
 		serviceCancel(cause)
 	}
