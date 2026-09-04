@@ -31,18 +31,27 @@
 - `service.go`
 - `service_signal_test.go`
 
-## 3. `stopService()` 没执行或执行异常
+## 3. 用户 Stop 函数没执行，或只执行了一次
 
 优先检查：
 
 1. 当前是否真的走到了 ctx 驱动退出路径
 2. 停止函数本身是否阻塞
 3. 是否已进入 timeout / force-exit 路径
+4. 同一轮运行内 Stop 只会执行一次（由 `stopFuncOnce` 保证）；下一轮 `Run` 之前会复位，
+   所以 restart 或二次运行时 **Stop 会再次被调用**——它必须写成幂等的，
+   不要用裸 `close(ch)` 这类只能做一次的写法
+5. Stop 与 RunFunc 的退出是**并发**的：Stop 被调用时用户的 Run 可能还在跑，
+   不要在 Stop 里假设 Run 已经释放了资源
+
+提示：用户 Stop 的调用入口是 `stopWithCause`（`service_runtime.go`），
+它在取消上下文之后同步调用 Stop 与停止钩子，并不等待 RunFunc 返回。
 
 建议联查：
 
-- `service.go`
+- `service_runtime.go`（`stopWithCause`、`callStopFunctions`）
 - `service_concurrent_test.go`
+- `service_race_regression_test.go`（停止意图的兑现时序）
 
 ## 4. help / completion / version 输出异常
 

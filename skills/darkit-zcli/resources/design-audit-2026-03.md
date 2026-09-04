@@ -1,5 +1,10 @@
 # ZCli 设计审计与边界说明（2026-03）
 
+> **已归档（2026-09-04）**：本文是框架**维护者视角**的历史审计记录，已从上层的
+> `SKILL.md` 导航中摘除——对基于 zcli 开发应用没有指导价值。
+> 兼容方向的现行契约见 `cobra-fusion-contract.md`，运行期行为以源码和测试为准。
+> 文内多处结论已被后续改动取代，均就地标注，不再回改正文。
+
 本审计文档记录本轮对 `github.com/darkit/zcli` 的设计级问题分析、已修复项与仍需知晓的边界约束。兼容方向的正式契约见 `cobra-fusion-contract.md`。
 
 ## 本轮已确认并修复的问题
@@ -24,6 +29,13 @@
 
 - `stopOnce` / `stopFuncOnce` 不在新一轮 `Run()` 前复位
 - 现已在每次运行前重置 stop 状态
+
+> **已被后续改动取代（d58e0f7，2026-09-04）**：现在改为**条件重置**——
+> `service_runtime.go` 在 `Run` 的启动临界区内先消费「待兑现的停止意图」，
+> 只有没有待兑现意图时才重置 `stopExecuted` / `stopFuncOnce`。
+> 因此「先 Stop、后 Run」时 Run 会立即停止且不执行用户 RunFunc；
+> 也正因每轮运行前会复位，用户 `Stop()` 必须是幂等的（否则 restart 时二次调用会出错）。
+> 详见 `service-management.md` 的「停止意图」一节。
 
 ### 5. API error-first 语义不一致
 
@@ -63,9 +75,19 @@
 
 后续若继续演进，建议考虑拆分运行生命周期、命令适配与错误策略。
 
+> **已被后续改动取代（14a57aa，与本文档同日落地）**：拆分已完成——
+> `service.go` 只保留 sManager 装配、`buildRunner` 与 `createServiceConfig`；
+> 运行生命周期在 `service_runtime.go`；系统命令装配在 `service_commands.go`；
+> 权限检查、强制退出调度与错误处理器链在 `service_support.go`。
+> 该区域仍是全仓状态复杂度最高的部分，改动前先跑
+> `service_concurrent_test.go` 与 `service_race_regression_test.go`。
+
 ### 4. 公开词汇仍有少量底层泄漏
 
 当前主线虽然采用 alias-first 兼容策略，但仍存在少量公开签名直接暴露 `*cobra.Command` / `cobra.CompletionFunc` 的情况。
+
+> **已收口（2026-09 前）**：公开签名已统一到 zcli 别名（`Command` / `CompletionFunc`），
+> 底层身份由 type alias 保留。详见 `cobra-fusion-contract.md` §4.1。
 
 建议：
 

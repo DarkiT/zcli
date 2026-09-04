@@ -104,11 +104,19 @@ type Runtime struct {
     BuildInfo       *VersionInfo   // 构建信息
     ShutdownInitial time.Duration  // 取消 Run(ctx) 后的主服务退出时长（默认 15s）
     ShutdownGrace   time.Duration  // stop hook / 最终清理的额外时长（默认 5s）
-    StartTimeout    time.Duration  // daemon 启动超时
-    StopTimeout     time.Duration  // daemon 停止超时，默认 20s
+    StartTimeout    time.Duration  // daemon 启动超时，写入 Config.Timeout.Start
+    // StopTimeout 进程内停止/强制退出超时，默认 20s。
+    // 只有经 WithServiceTimeouts 显式设置时，才会写入 daemon Config.Timeout.Stop；
+    // 直接构造 Runtime{} 或 WithRuntime 传入不会下发给 daemon。
+    StopTimeout     time.Duration
+    RestartTimeout  time.Duration  // 重启间隔，写入 daemon Config.Timeout.Restart
     ErrorHandlers   []ErrorHandler // 错误处理器链
 }
 ```
+
+> `StopTimeout` 的双重语义容易踩坑：它既是进程内强制退出计时器的时长，又（仅当用
+> `WithServiceTimeouts` 设置过）作为 daemon 的停止超时。详见 `service-management.md`
+> 的关闭预算一节。
 
 **函数签名**：
 
@@ -169,7 +177,7 @@ app, _ := zcli.NewBuilder("zh").
 | `WithEnvVar(key, value)` | 添加环境变量 | `.WithEnvVar("ENV", "prod")` |
 | `WithServiceUser(username)` | 设置系统服务运行用户 | `.WithServiceUser("svc-app")` |
 | `WithExecutable(path)` | 设置系统服务可执行文件 | `.WithExecutable("/opt/app/bin/app")` |
-| `WithArguments(args...)` | 设置系统服务参数；空列表可清空默认 `run` | `.WithArguments("run", "--profile", "prod")` |
+| `WithArguments(args...)` | 设置系统服务的启动参数；不设置时默认为 `["run"]`，**无参调用等价于不设置，不会清空** | `.WithArguments("run", "--profile", "prod")` |
 | `WithChRoot(dir)` | 设置 chroot 根目录 | `.WithChRoot("/srv/jail")` |
 | `WithDependencies(deps...)` | 设置 require 型结构化依赖 | `.WithDependencies("postgresql")` |
 | `WithLegacyDependencies(deps...)` | 设置 daemon 原生字符串依赖 | `.WithLegacyDependencies("network.target")` |
@@ -195,7 +203,8 @@ app, _ := zcli.NewBuilder("zh").
 | `WithInitHook(hook)` | 添加命令执行前初始化钩子 | `.WithInitHook(loadConfig)` |
 | `WithErrorHandler(handler)` | 添加错误处理器 | `.WithErrorHandler(zcli.NewRecoveryErrorHandler(3, time.Second))` |
 | `WithMousetrapDisabled(true)` | 禁用 Windows 双击提示 | `.WithMousetrapDisabled(true)` |
-| `WithDefaultConfig()` | 使用默认配置 | `.WithDefaultConfig()` |
+| `WithDefaultConfig()` | **无条件覆盖**语言为 en、版本为 1.0.0 并关闭 Debug——会冲掉 `NewBuilder("zh")` 和已设版本 | `.WithDefaultConfig()` |
+| `WithDefaults()` | 仅在为空时补齐语言/版本，保留已设置的值（想保留自定义值时用这个） | `.WithDefaults()` |
 
 ## 常见错误
 

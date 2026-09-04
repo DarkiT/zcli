@@ -28,9 +28,7 @@ import (
     "log"
     "log/slog"
     "os"
-    "runtime"
     "sync"
-    "time"
 
     "github.com/darkit/zcli"
 )
@@ -61,8 +59,11 @@ func main() {
     // 创建服务
     svc := NewService(cfg)
 
-    // 创建生命周期管理器
+    // 创建生命周期管理器，并用 ManagedService 把它和服务接线
+    // 注意：框架不会自动发现 ServiceLifecycle。不包这一层的话，
+    // BeforeStart / AfterStart / BeforeStop / AfterStop 一个都不会被调用，且不报错。
     lifecycle := NewLifecycle(cfg, svc)
+    managed := zcli.NewManagedService(svc, lifecycle)
 
     // 创建 CLI 应用
     appBuilder := zcli.NewBuilder("zh").
@@ -72,7 +73,7 @@ func main() {
         WithVersion(Version).
         WithLogo(logo).
         WithGitInfo(GitCommit, "main", "").
-        WithServiceRunner(svc).
+        WithServiceRunner(managed).
         // 注意：使用 getter 方法访问 Config 字段
         WithValidator(validateConfig)
 
@@ -152,10 +153,11 @@ import (
 )
 
 type Service struct {
-    config *AppConfig
-    server *http.Server
-    db     *Database
-    stopCh chan struct{}
+    config   *AppConfig
+    server   *http.Server
+    db       *Database
+    stopCh   chan struct{}
+    stopOnce sync.Once
 }
 
 func NewService(cfg *AppConfig) *Service {
@@ -206,7 +208,11 @@ func (s *Service) Run(ctx context.Context) error {
 
 func (s *Service) Stop() error {
     slog.Info("停止服务")
-    close(s.stopCh)
+    // 必须幂等：框架在每一轮 Run 之前复位停止一次性标志，restart 或二次运行时
+    // Stop 会被再次调用，裸 close(s.stopCh) 会 panic: close of closed channel。
+    s.stopOnce.Do(func() {
+        close(s.stopCh)
+    })
     return nil
 }
 

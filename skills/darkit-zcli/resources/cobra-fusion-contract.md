@@ -76,16 +76,21 @@ ZCli 主线采用 **alias-first compatibility core + additive ergonomic layer**�
 
 ### 4.1 公开词汇泄漏
 
-当前仍有少量公开签名直接暴露 `*cobra.Command` 或 `cobra.CompletionFunc`。  
-这不是 bug，但会削弱“常规路径只需导入 zcli”的体验，应通过增量 API 收口。
+已收口：对外签名不再直接出现 `*cobra.Command` / `cobra.CompletionFunc` 字面量，一律使用
+zcli 别名（`command.go:18` `Command = cobra.Command`、`:22` `CompletionFunc = cobra.CompletionFunc`），
+底层身份通过 type alias 保留，逃生口 `Command()` 返回的也是 `*zcli.Command`。
+未导出的内部实现仍直接引用 cobra 类型，属有意保留的 raw 层。
 
 ### 4.2 文档漂移
 
-当前文档体系中至少存在三类漂移风险：
+以下三类漂移**已于 2026-09 前全部收口**，此处留作历史记录：
 
-- API 文档示例仍使用 `*cobra.Command`
-- 完整示例仍把 `cobra` / `pflag` 作为主路径依赖
-- README 的 Go 版本承诺与 `go.mod` 不一致
+- API 文档示例曾使用 `*cobra.Command` → 已改为 zcli 别名
+- 完整示例曾把 `cobra` / `pflag` 作为主路径依赖 → 6 个官方示例已无 cobra/pflag import
+- README 的 Go 版本承诺与 `go.mod` 不一致 → README 已写明「以 go.mod 为准」（当前 Go 1.25.0）
+
+**现行风险**：示例存在两份（`examples/` 与 `skills/darkit-zcli/resources/complete-example.md`），
+改动 API 时两处都要同步，否则文档示例会先于代码腐化。
 
 ### 4.3 Service 高状态复杂度
 

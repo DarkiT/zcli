@@ -192,7 +192,21 @@ func (b *Builder) WithNotify(enabled bool) *Builder
 func (b *Builder) WithServiceConfig(fn func(*ServiceConfig)) *Builder
 ```
 
-配置系统服务安装与平台特定选项。`WithArguments()` 传入空列表会显式清空默认的 `"run"` 参数。`WithForce(true)` 对齐 daemon `Config.Force`；`WithNotify(true)` 写入 `OptionNotify`。
+配置系统服务安装与平台特定选项。`WithForce(true)` 对齐 daemon `Config.Force`；`WithNotify(true)` 写入 `OptionNotify`。
+
+`WithArguments` 有两处反直觉的地方：
+
+1. **无参调用不会清空默认参数。** 服务启动参数默认是 `["run"]`；`WithArguments()` 不传
+   参数会落成 `nil`，而装配时只在 `Arguments != nil` 才覆盖（`service.go:285`），
+   于是回落到默认的 `["run"]`。
+2. **`WithServiceConfig` 置空切片同样无效。** 深拷贝按 `len() > 0` 过滤
+   （`options.go:228`），`c.Arguments = []string{}` 会被丢成 `nil`，走不到覆盖分支。
+
+也就是：**当前没有把服务启动参数清空为零个的公开路径**。确实需要不带参数启动时，
+请自定义 `WithExecutable()` 包装脚本，或传入显式的占位参数并自行忽略。
+
+> 注：`builder.go` 中 `WithArguments` 的源码注释写的是「传入空参数列表会显式清空默认的
+> "run" 参数」，与实现不符——那是注释错误，不要照它理解。
 
 ---
 
@@ -537,7 +551,7 @@ const (
 
 | 原因 | 触发场景 | `ShutdownCause.Signal` |
 |------|----------|------------------------|
-| `signal` | RunWait 捕获到 SIGINT / SIGTERM / SIGQUIT | 具体信号 |
+| `signal` | RunWait 捕获到 SIGINT / SIGTERM / SIGQUIT（SIGQUIT 仅非 Windows） | 具体信号 |
 | `service_stop` | 调用 `Stop()`，或交互模式下 Run 结束时的补偿停止 | `nil` |
 | `external_cancel` | 父级 context 被取消（配置 context，或传给 Run 的外部 context） | `nil` |
 
@@ -548,6 +562,10 @@ func GetShutdownCause(ctx context.Context) (*ShutdownCause, bool)
 ```
 
 在 `Run(ctx)` 内读取结构化关闭原因：
+
+> `ok` 为 `false` 有两种含义：ctx **尚未被取消**，或取消原因不是 `*ShutdownCause`
+> （例如被一次普通的 `cancel()` 取消，见 `shutdown_cause.go:61-71`，底层走 `errors.As`）。
+> 因此应在 `ctx.Done()` 之后、且确实需要区分原因时再读取，不能依赖它判断“是否已停止”。
 
 ```go
 func (s *MyService) Run(ctx context.Context) error {

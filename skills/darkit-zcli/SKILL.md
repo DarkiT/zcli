@@ -1,6 +1,7 @@
 ---
 name: darkit-zcli
 description: zcli 工作区本地导航层。用于构建、审查、重构、编写文档或排查基于 zcli 的 Go CLI 应用及 zcli 框架本身的问题，特别是涉及 NewBuilder/BuildWithError、QuickCLI/QuickService、Cobra 命令树、标志导出（ExportFlagsForViper）、ServiceRunner/WithService、daemon 服务安装配置、i18n 语言包、优雅关闭（ShutdownCause）以及官方示例对齐的场景。
+user-invocable: false
 ---
 
 # darkit-zcli
@@ -74,9 +75,12 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 
 先读 `./resources/troubleshooting.md` → 打开最小相关测试文件
 
-### 设计理由 / 审计历史
+### 设计理由
 
-读 `DESIGN.md`、`./resources/design-audit-2026-03.md`
+读 `DESIGN.md`
+
+> 框架自身的审计历史 `resources/design-audit-2026-03.md` 不在本导航内：那是面向 zcli
+> 维护者的内部记录（历史缺陷、重构边界），对基于 zcli 开发应用没有指导价值，已归档。
 
 ## 高信号源码文件
 
@@ -124,7 +128,10 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 - `WithCommand()` / `WithCommands()` / `WithCommandFactory()` 在 Builder 未构建时延迟收集，构建后直接追加
 - 常规 main 优先 `os.Exit(app.Run())`；需要读取 `*Cli` 的命令用 `WithCommandFactory`
 - 默认关闭预算：`ShutdownInitial=15s` + `ShutdownGrace=5s`
-- 默认 `StopTimeout=20s`，后台模式超时触发强制退出
+- 默认 `StopTimeout=20s`：既是进程内强制退出计时时长，也（仅当经 `WithServiceTimeouts` 设置过）作为 daemon 停止超时
+- `Stop()` 不等待 RunFunc 返回——取消 ctx 后随即并发调用用户 `Stop()`，所以用户 Stop 必须写成幂等的
+- 停止意图会被保留：先 `Stop()`、之后才启动的运行会立即返回 nil 且不执行用户 RunFunc
+- `ServiceLifecycle` 的四个钩子必须经 `NewManagedService(runner, lifecycle)` 包装才生效，直接注入裸 runner 时不执行且不报错
 - `ExportFlagsForViper` 自动排除 23 个系统标志，并按名字去重
 - 帮助写到 stdout；服务命令按 `ServiceCommandGroupID` 分组
 - 纯服务根命令默认 `run`，混合应用默认 help，可用 `WithRootAction` 覆盖
@@ -132,6 +139,12 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 - `ManagedService` 正常取消会返回 `nil`，并保证 `BeforeStop` / `Stop` / `AfterStop` 在并发关闭路径只执行一次
 - 官方 E2E 位于 `tests/e2e/examples_test.go`，会断言 Ctrl+C 不打印 `Usage:` / `context canceled` / 命令失败日志
 - `github.com/darkit/daemon` 经 `go.mod` 依赖（当前 v1.4.0），仓库内没有 `go.work`；对齐 `Force`/`Notify`/`Timeout.Restart`/`reinstall` 与 daemon 哨兵错误
+
+## 何时不使用
+
+- 只想查某个 API 的签名：直接读 `README.md`，本 skill 是导航层，不复制完整 API 文档
+- 要追溯 zcli 自身的重构历史与内部边界：那是框架维护者视角，本 skill 不覆盖
+- 发现本 skill 的描述与源码不符时：以源码和测试为准，**并回来修正对应条目**，不要把文档当既定事实
 
 ## 约束
 

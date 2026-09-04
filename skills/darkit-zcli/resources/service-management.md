@@ -122,6 +122,26 @@ type ServiceLifecycle interface {
 }
 ```
 
+> **必须显式接线才会生效。** 框架不会自动发现 `ServiceLifecycle`。这四个钩子只有把
+> runner 用 `zcli.NewManagedService(runner, lifecycle)` 包装后再注入才会被调用
+> （`service_interface.go:385` 是唯一给 `lifecycle` 赋值的入口，四个钩子分别在
+> `service_interface.go:397/413/464/476` 处仅在非 nil 时调用）。
+> 直接把裸 `ServiceRunner` 传给 `WithServiceRunner` 时，钩子全部不执行，且不报错——
+> 这是最容易静默踩空的地方。
+
+```go
+svc := NewService(cfg)
+lifecycle := NewLifecycle(cfg, svc)
+
+// 关键一步：用 ManagedService 把 runner 和 lifecycle 绑在一起
+managed := zcli.NewManagedService(svc, lifecycle)
+
+app, err := zcli.NewBuilder("zh").
+    WithName("myapp").
+    WithServiceRunner(managed). // 传 managed，不是 svc
+    BuildWithError()
+```
+
 ### 生命周期执行顺序
 
 ```
@@ -191,6 +211,10 @@ func (l *AppLifecycle) AfterStop() error {
 
 ## 信号处理（RunWait 机制）
 
+> **装配前提**：只有通过 `WithService` / `WithServiceRunner` 配置了 Run 函数，框架才会
+> 创建 sManager 并安装信号监听——`initService()` 在 `runtime.Run == nil` 时直接返回
+> （`service_commands.go:19-21`）。纯命令型 CLI 应用不会注册任何信号处理器。
+
 ### 默认流程
 
 ```
@@ -250,12 +274,16 @@ RunWait 捕获 SIGINT/SIGTERM/SIGQUIT
     ↓
 sm.Stop() 取消传给用户 Run(ctx) 的 context
     ↓
-Run(ctx) 收到 ctx.Done() 并返回 nil
+sm.Stop() 取消传给用户 Run(ctx) 的 context，并同时调用用户 Stop() / 生命周期停止钩子
+    ↓  （二者并发：Stop 不等待 RunFunc 返回，由 stopFuncOnce 保证只执行一次）
+Run(ctx) 收到 ctx.Done() 并返回
     ↓
-必要时执行 Stop() / 生命周期停止钩子
-    ↓
-Execute 返回 nil，进程以 0 退出
+Execute 返回 nil
 ```
+
+`Execute` 只把 error 交回调用方，**框架自身不在正常关闭路径调用 `os.Exit`**——进程退出码
+由你的 `main` 决定（`os.Exit(app.Run())` 或 `app.Main()`）。框架唯一主动结束进程的地方是
+后台模式的强制退出保护，届时以退出码 1 直接退出。
 
 正常关闭不应向 Cobra 返回 `context.Canceled`，否则 Cobra 会按命令错误打印 `Error:` 和 `Usage:`。
 `ManagedService` 会把 `context.Canceled`、`context.DeadlineExceeded` 和 `ShutdownCause` 归一为成功关闭，并保证 `BeforeStop` / `Stop` / `AfterStop` 在并发关闭路径只执行一次。

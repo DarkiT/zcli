@@ -287,7 +287,7 @@ func processWithTimeout(ctx context.Context) error {
 |------|----------|------|
 | SIGINT | Ctrl+C | 触发 ctx.Done() |
 | SIGTERM | kill PID | 触发 ctx.Done() |
-| SIGQUIT | Ctrl+\ | 触发 ctx.Done() |
+| SIGQUIT | Ctrl+\ | 触发 ctx.Done()（**仅非 Windows**，Windows 只注册 SIGINT/SIGTERM） |
 
 ### 自定义信号处理
 
