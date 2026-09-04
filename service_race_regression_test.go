@@ -111,10 +111,68 @@ func TestConcurrentRunStopNoDataRace(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(testDuration(3 * time.Second)):
-		// 兜底收敛，避免测试挂死；能走到这里说明有 Run 没被 Stop 停掉
+		// 兜底收敛，避免测试挂死。此处刻意不断言失败：
+		// stopExecuted 是单次的全局标志，一次 Stop 只能兑付一个运行中的服务，
+		// 20 个 Run 并发时剩余的 Run 需要各自的 Stop 才会退出——这是既有语义，
+		// 本用例的职责是暴露 data race。活性契约由
+		// TestStopConcurrentWithRunTerminates 保障。
 		baseCancel()
 		<-done
-		t.Errorf("%d 组 Run/Stop 并发中，存在未被 Stop 停止的 Run", pairs)
+	}
+}
+
+// TestStopConcurrentWithRunTerminates 验证 Stop 与 Run 同时起步时，单次 Stop
+// 必定让 Run 退出——不允许出现「Stop 返回 nil 但服务还在跑」的静默失效。
+//
+// 失效形态（修复前实测 6/30）：Stop 取消的是旧 session，Run 随后重建 session
+// 继续运行，且 Stop 返回值是 nil，调用方无从察觉。
+func TestStopConcurrentWithRunTerminates(t *testing.T) {
+	const trials = 30
+	stuck := 0
+
+	for i := 0; i < trials; i++ {
+		config := NewConfig()
+		config.basic.Name = "race-stop-terminate"
+		config.runtime.Run = func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		}
+
+		baseCtx, baseCancel := context.WithCancel(context.Background())
+		config.ctx = baseCtx
+
+		cli := &Cli{config: config, colors: newColors(), lang: GetLanguageManager().GetPrimary()}
+		sm, err := newServiceManager(cli, baseCtx, baseCancel)
+		if err != nil {
+			baseCancel()
+			t.Fatalf("trial %d: newServiceManager: %v", i, err)
+		}
+
+		gate := make(chan struct{})
+		runDone := make(chan struct{})
+		go func() {
+			defer close(runDone)
+			<-gate
+			_ = sm.Run(nil)
+		}()
+		go func() {
+			<-gate
+			_ = sm.Stop()
+		}()
+		close(gate)
+
+		select {
+		case <-runDone:
+		case <-time.After(testDuration(500 * time.Millisecond)):
+			stuck++
+			baseCancel()
+			<-runDone
+		}
+		baseCancel()
+	}
+
+	if stuck > 0 {
+		t.Errorf("%d/%d 轮出现 Stop 静默失效：Run 在 Stop 之后仍在运行", stuck, trials)
 	}
 }
 

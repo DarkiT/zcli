@@ -121,13 +121,26 @@ func (sm *sManager) Run(externalCtx context.Context) error {
 		sm.exitChan = make(chan struct{})
 	default:
 	}
-	sm.stopExecuted.Store(false)
-	sm.stopFuncOnce.Store(false)
+	// 先于本次运行落地的停止请求必须在这里领受：那次 Stop 取消的是旧 session，
+	// 本次运行若不兑现它，就会带着「已被请求停止」的状态跑起来，且再没人停它。
+	stopCause, stopImmediately := sm.consumeStopIntentLocked()
+	if !stopImmediately {
+		sm.stopExecuted.Store(false)
+		sm.stopFuncOnce.Store(false)
+	}
 	sm.running.Store(true)
 	sm.mu.Unlock()
 	sm.stopMu.Unlock()
+
 	defer runCancel(nil)
 	defer sm.clearServiceContext(session)
+	defer sm.running.Store(false)
+	defer sm.cancelForceExit()
+
+	if stopImmediately {
+		runCancel(stopCause)
+		return nil
+	}
 
 	configCtx := sm.commands.config.Context()
 	if configCtx != nil && configCtx != session.commandCtx {
@@ -155,9 +168,6 @@ func (sm *sManager) Run(externalCtx context.Context) error {
 			}
 		}()
 	}
-
-	defer sm.running.Store(false)
-	defer sm.cancelForceExit()
 
 	if sm.commands.config.runtime.Run != nil {
 		if err := sm.commands.config.runtime.Run(runCtx); err != nil {
@@ -215,6 +225,18 @@ func (sm *sManager) stopWithCause(cause error, callUserStop bool) error {
 	if sm.session != nil {
 		serviceCancel = sm.session.serviceCancel
 		commandCancel = sm.session.commandCancel
+	}
+
+	// 停止意图的存留，取决于这次取消有没有兑现对象：
+	// 有服务在跑时，下面的 cancel 就是兑现动作，意图随即清除——否则 restart
+	// （stop 之后紧接 start）会被上一次的停止意图吞掉，服务再也起不来；
+	// 没有服务在跑时，这次 cancel 打在空处，把意图留下来等随后启动的 Run 消费。
+	if sm.running.Load() {
+		sm.stopRequested = false
+		sm.stopCause = nil
+	} else {
+		sm.stopRequested = true
+		sm.stopCause = cause
 	}
 	sm.mu.Unlock()
 	sm.stopMu.Unlock()

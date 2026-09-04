@@ -51,6 +51,17 @@ type sManager struct {
 	stopExecuted   atomic.Bool
 	stopFuncOnce   atomic.Bool
 	forceExitOnce  atomic.Bool
+	// stopRequested / stopCause 承载「尚未兑现的停止意图」，归 mu 保护。
+	//
+	// 存在理由：Stop 取消的是调用那一刻的 session。若此时还没有运行中的服务
+	// （例如 stop 与 run 命令几乎同时下发），这次取消就没有兑现对象，而随后
+	// 启动的 Run 会重建 session 继续跑——停止语义就此丢失，且 Stop 仍返回 nil。
+	// 保留意图后，Run 在启动临界区内消费它并立即停止。
+	//
+	// 反过来，若 Stop 时确有服务在运行，意图立即通过 cancel 兑现，标志随之
+	// 清除——否则 restart（stop 后紧接 start）会被上一次的停止意图吞掉。
+	stopRequested bool
+	stopCause     error
 	forceExitTimer *time.Timer
 	errorHandlers  []ErrorHandler
 	handlersMu     sync.RWMutex
@@ -227,6 +238,22 @@ func (sm *sManager) clearServiceContext(session *serviceRunSession) {
 	}
 	session.serviceCtx = nil
 	session.serviceCancel = nil
+}
+
+// consumeStopIntentLocked 取出并清除尚未兑现的停止意图。
+// 调用方必须持有 sm.mu。
+// 返回 true 表示本次运行应当立即停止，不再执行用户 RunFunc。
+func (sm *sManager) consumeStopIntentLocked() (error, bool) {
+	if !sm.stopRequested {
+		return nil, false
+	}
+	cause := sm.stopCause
+	sm.stopRequested = false
+	sm.stopCause = nil
+	if cause == nil {
+		cause = newShutdownCause(ShutdownReasonServiceStop, nil, nil)
+	}
+	return cause, true
 }
 
 // Name 返回服务名称
