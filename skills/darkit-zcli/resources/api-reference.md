@@ -336,13 +336,15 @@ func (c *Cli) ExportFlagsForViper(exclude ...string) []*FlagSet
 
 导出标志给 Viper，自动过滤 23 个系统标志。
 
-**默认排除的系统标志**：
-- 帮助系统：`help`, `h`
-- 版本系统：`version`, `v`
-- 补全系统：`completion`, `*-completion`, `gen-completion`
-- Cobra 内部补全：`__complete`, `__completeNoDesc`, `no-descriptions`
-- 兼容补全：`bash-completion`, `zsh-completion`, `fish-completion`, `powershell-completion`
-- 配置系统常见辅助标志：`config-help`, `print-config`, `validate-config`
+**默认排除的系统标志**（23 个，与 `command_flags.go` 的 `getDefaultSystemFlags()` 逐项一致）：
+- 帮助系统（2）：`help`, `h`
+- 版本系统（2）：`version`, `v`
+- 标准补全（2）：`completion`, `complete`
+- Shell 补全（5）：`completion-bash`, `completion-zsh`, `completion-fish`, `completion-powershell`, `gen-completion`
+- Cobra 内部补全（3）：`__complete`, `__completeNoDesc`, `no-descriptions`
+- 兼容补全（4）：`bash-completion`, `zsh-completion`, `fish-completion`, `powershell-completion`
+- 内部调试（2）：`debug-completion`, `trace-completion`
+- 配置系统常见辅助标志（3）：`config-help`, `print-config`, `validate-config`
 
 **示例**：
 
@@ -390,12 +392,17 @@ type ServiceRunner interface {
 **Run 方法**：
 - 运行服务主逻辑
 - 必须监听 `ctx.Done()` 实现优雅关闭
-- 正常关闭推荐返回 `nil`；底层会把 `context.Canceled` / `context.DeadlineExceeded` / `ShutdownCause` 归一为成功退出
+- 正常关闭推荐返回 `nil`；返回 `context.Canceled` / `context.DeadlineExceeded` / `ShutdownCause` 时，
+  仅当**运行上下文已处于取消状态**才归一为成功退出（判据 `isExpectedShutdownError(err) && runCtx.Err() != nil`）。
+  若 Run 自行返回这些错误而 runCtx 并未取消，错误会原样上抛
 - 返回业务 `error` 表示异常退出
+- 若停止请求先于本次运行落地，Run 会立即取消运行上下文并返回 `nil`，**根本不会执行 Run 方法**。
+  编写清理逻辑时不要假设 Run 一定被调用过（详见 service-management.md 的"停止意图"一节）
 
 **Stop 方法**：
 - 停止服务，执行清理工作
-- 在 Run 返回后调用
+- **与 Run 并发调用**：框架在取消上下文后立即执行 Stop，不等待 Run 返回，并由 `stopFuncOnce`
+  保证只执行一次。必须假定 Stop 能与 Run 同时运行，二者共享的状态需自行加锁
 
 **Name 方法**：
 - 返回服务名称
@@ -512,6 +519,56 @@ func QuickCLI(name, displayName, description string) *Cli
 ```
 快速创建基础 CLI 应用。
 
+---
+
+## Shutdown API
+
+### ShutdownReason
+
+```go
+type ShutdownReason string
+
+const (
+    ShutdownReasonSignal         ShutdownReason = "signal"
+    ShutdownReasonServiceStop    ShutdownReason = "service_stop"
+    ShutdownReasonExternalCancel ShutdownReason = "external_cancel"
+)
+```
+
+| 原因 | 触发场景 | `ShutdownCause.Signal` |
+|------|----------|------------------------|
+| `signal` | RunWait 捕获到 SIGINT / SIGTERM / SIGQUIT | 具体信号 |
+| `service_stop` | 调用 `Stop()`，或交互模式下 Run 结束时的补偿停止 | `nil` |
+| `external_cancel` | 父级 context 被取消（配置 context，或传给 Run 的外部 context） | `nil` |
+
+### 读取关闭原因
+
+```go
+func GetShutdownCause(ctx context.Context) (*ShutdownCause, bool)
+```
+
+在 `Run(ctx)` 内读取结构化关闭原因：
+
+```go
+func (s *MyService) Run(ctx context.Context) error {
+    <-ctx.Done()
+    if cause, ok := zcli.GetShutdownCause(ctx); ok {
+        switch cause.Reason {
+        case zcli.ShutdownReasonSignal:
+            log.Printf("被信号 %v 停止", cause.Signal)
+        case zcli.ShutdownReasonExternalCancel:
+            log.Printf("父级取消：%v", cause.Cause)
+        case zcli.ShutdownReasonServiceStop:
+            log.Print("服务停止")
+        }
+    }
+    return nil
+}
+```
+
+`ShutdownCause` 自身实现 `error`，也可通过 `context.Cause(ctx)` 或 `errors.As` 取得；
+`Unwrap()` 返回其底层的 `Cause`（父级取消场景下即原始错误）。
+
 ## Error API
 
 ### 创建错误
@@ -567,6 +624,7 @@ if err := initCache(); err != nil {
 }
 
 if aggregator.HasErrors() {
-    return aggregator.Error()
+    // 注意：Error() 返回 string（用于打印日志），要作为 error 返回需用 Errors()
+    return errors.Join(aggregator.Errors()...)
 }
 ```

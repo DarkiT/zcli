@@ -112,6 +112,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 | `tests/e2e/examples_test.go`        | 官方 examples 端到端与 SIGINT 静默退出回归 |
 | `service_force_exit_test.go`        | 强制退出路径                               |
 | `service_concurrent_test.go`        | 并发安全                                   |
+| `service_race_regression_test.go`   | sManager 并发回归：锁所有权、停止意图兑现   |
 | `service_edge_cases_test.go`        | 边界条件                                   |
 | `i18n_test.go`                      | 多语言系统                                 |
 
@@ -130,7 +131,7 @@ description: zcli 工作区本地导航层。用于构建、审查、重构、�
 - 示例默认英文，中文需 `NewBuilder("zh")`
 - `ManagedService` 正常取消会返回 `nil`，并保证 `BeforeStop` / `Stop` / `AfterStop` 在并发关闭路径只执行一次
 - 官方 E2E 位于 `tests/e2e/examples_test.go`，会断言 Ctrl+C 不打印 `Usage:` / `context canceled` / 命令失败日志
-- 本地开发通过仓库根 `go.work` 把 `github.com/darkit/daemon` 指到 `/workspace/service`；对齐 `Force`/`Notify`/`Timeout.Restart`/`reinstall` 与 daemon 哨兵错误
+- `github.com/darkit/daemon` 经 `go.mod` 依赖（当前 v1.4.0），仓库内没有 `go.work`；对齐 `Force`/`Notify`/`Timeout.Restart`/`reinstall` 与 daemon 哨兵错误
 
 ## 约束
 

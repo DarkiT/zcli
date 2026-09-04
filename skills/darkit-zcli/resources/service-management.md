@@ -27,7 +27,8 @@ type ServiceRunner interface {
 - **上下文驱动**：通过 context.Context 实现优雅关闭
 - **错误返回**：所有操作返回错误而非 panic
 - **可识别性**：每个服务都有唯一名称
-- **并发安全**：内部通过 `getCtx()` 只读访问共享 Context，避免竞态
+- **并发安全**：`session` / `exitChan` / `service` / 强制退出定时器等共享状态统一由 `sm.mu` 保护，
+  `stopMu` 只串行化停止流程本身（锁序 `stopMu` → `mu`）；停止意图另有专属状态，见"停止意图"一节
 
 ### 基本服务实现
 
@@ -185,7 +186,8 @@ func (l *AppLifecycle) AfterStop() error {
 - 系统服务模式：底层 `github.com/darkit/daemon` 的 `Status()`
 - 业务内部：服务实现自行维护健康状态或暴露 `health` 命令
 
-框架内部使用原子状态保护重复运行、重复停止和后台强制退出；这些状态不作为公开 API 承诺。
+框架内部使用原子状态保护重复运行、重复停止和后台强制退出；此外还有一组受 `sm.mu` 保护的状态
+承载**停止意图**，保证先于运行落地的 Stop 不会被后续 Run 吞掉（见"停止意图"一节）。这些状态均不作为公开 API 承诺。
 
 ## 信号处理（RunWait 机制）
 
@@ -194,9 +196,11 @@ func (l *AppLifecycle) AfterStop() error {
 ```
 Run() → 内部创建 runCtx（可取消）
     ↓
-RunWait() 监听 SIGINT/SIGTERM/SIGQUIT → 捕获后调用 sm.Stop()
+RunWait() 监听信号 → 捕获后以 ShutdownReasonSignal 触发停止流程
     ↓
-Stop() 优雅清理 → 返回后 RunWait 退出
+取消运行上下文 → 并发执行用户 Stop()（由 stopFuncOnce 保证仅一次）
+    ↓
+Run() 退出，RunWait 返回
 ```
 
 ### 默认处理的信号
@@ -205,9 +209,14 @@ Stop() 优雅清理 → 返回后 RunWait 退出
 |------|----------|------|
 | SIGINT | Ctrl+C | RunWait 触发停止流程 |
 | SIGTERM | kill PID | RunWait 触发停止流程 |
-| SIGQUIT | Ctrl+\ | RunWait 触发停止流程 |
+| SIGQUIT | Ctrl+\ | RunWait 触发停止流程（**仅非 Windows**，Windows 只监听 SIGINT/SIGTERM） |
 
-> 兜底超时：15s 现在封装在 `Run()` 内部，无需手动处理；如需自定义请调用 `WithShutdownTimeouts`。
+> 信号监听通过注入 daemon 的 `OptionRunWait` 钩子实现（内部用 `signal.Notify`，不是
+> `signal.NotifyContext`）。若用户自带 `OptionRunWait`，框架不再注入默认监听。
+>
+> 关于超时：15s + 5s 分级预算**只在 CLI 前台 `run` 命令路径**生效（先等主服务退出，再等清理收尾），
+> 后台托管路径不走这段。且 `ShutdownInitial` / `ShutdownGrace` 显式传 0 不会禁用等待，
+> 而是回落为 3s + 2s。详见 `context-lifecycle.md`。
 
 ### 自定义信号处理（在业务中追加，而非替换框架监听）
 
@@ -276,23 +285,63 @@ func (s *HTTPService) Run(ctx context.Context) error {
 }
 ```
 
+## 停止意图
+
+Stop 取消的是调用那一刻的运行会话。当 `stop` 与 `run` 命令几乎同时下发时，那次取消可能
+**没有兑现对象**，而随后启动的 Run 会重建会话继续运行——停止语义就此丢失，且 Stop 早已
+返回 `nil`，调用方无从察觉。
+
+为此框架保留了一组**停止意图**状态（`stopRequested` / `stopCause`，受 `sm.mu` 保护）：
+
+| Stop 发生时的状态 | 处置 |
+|-------------------|------|
+| 有服务在运行 | 取消运行上下文即为兑现，意图随即清除 |
+| 无服务在运行 | 这次取消打在空处，把意图留存下来，等随后启动的 Run 消费 |
+
+Run 在建立运行上下文的临界区内消费意图。命中时：
+
+- 立即用该意图的原因取消运行上下文
+- **不执行 Run 方法**——编写清理逻辑时不要假设 Run 一定被调用过
+- 返回 `nil`
+
+意图被消费后即清除，因此一次 Stop 只终止一次运行，不会影响之后的 restart。
+
+> 为什么"有服务在跑"时反而要清除意图：否则 `restart`（stop 之后紧接 start）会被上一次的
+> 停止意图吞掉，服务再也起不来。
+
 ## 超时控制
 
 ### 分级超时保护
 
-默认提供 15+5 秒分级关闭预算（可配置）：
+分级预算**只在 CLI 前台 `run` 命令路径生效**（后台托管路径不走这段）：
 
 ```
-RunWait 捕获信号 → sm.Stop()
+外部取消 commandCtx（信号 / 父级 ctx 取消）
     ↓
-先取消 Run(ctx)，让主服务开始优雅退出
+等待 ShutdownInitial（默认 15s），给主服务优雅退出的时间
     ↓
-[超时] 等待 15 秒后进入最终清理
+[仍在运行] 才触发停止流程：取消运行上下文 + 执行用户 Stop()
     ↓
-[超时] 再等待 5 秒（清理期）
+等待 ShutdownGrace（默认 5s）完成清理
     ↓
-[超时] 后台模式复用 StopTimeout（默认 20s）触发强制退出保护
+[仍未退出] 记录警告并返回 nil（命令层面放弃等待）
 ```
+
+与之**并行**的是强制退出保护，它从首次 Stop 就开始计时，而非排在分级之后：
+
+```
+首次 Stop 发生 → scheduleForceExit(StopTimeout) 启动 20s 倒计时
+    ↓
+Run 正常返回 → defer cancelForceExit() 撤销倒计时
+    ↓
+[20s 到点仍未撤销] 后台模式直接强制退出
+```
+
+注意：
+
+- `ShutdownInitial` / `ShutdownGrace` 显式传 0 **不会禁用**等待，而是回落为 3s + 2s
+- `StopTimeout <= 0` 时强制退出保护**关闭**（`scheduleForceExit` 直接返回）
+- 交互模式（`service.Interactive()`）下不排强制退出定时器
 
 ### 自定义超时
 

@@ -11,29 +11,37 @@ ZCli 框架**自动管理** Context 生命周期，提供优雅的信号处理�
 框架内部自动创建带信号监听的 Context：
 
 ```go
-// 框架内部自动执行（无需用户编写）
-ctx, cancel := signal.NotifyContext(
-    context.Background(),
-    syscall.SIGINT,  // Ctrl+C
-    syscall.SIGTERM, // 终止信号
-    syscall.SIGQUIT, // 退出信号
-)
+// 框架内部：通过注入 daemon 的 OptionRunWait 钩子监听（无需用户编写）
+sigCh := make(chan os.Signal, 1)
+signals := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+if runtime.GOOS != "windows" {
+    signals = append(signals, syscall.SIGQUIT) // Windows 无 SIGQUIT
+}
+signal.Notify(sigCh, signals...)
 ```
+
+注意两点：
+
+- 用的是 `signal.Notify` 而非 `signal.NotifyContext`，信号不会自动转成父级 context 的取消
+- 若用户自带 `OptionRunWait`，框架不再注入默认监听
 
 ## 生命周期流程（含 RunWait）
 
 ```
 用户启动应用
     ↓
-Run() 创建 runCtx（可取消）
+Run() 建立 commandCtx / serviceCtx 双层上下文；serviceCtx 才是传给用户的 ctx
     ↓
-RunWait() 监听 SIGINT/SIGTERM/SIGQUIT，捕获后调用 sm.Stop()
+RunWait() 监听信号；捕获后以 ShutdownReasonSignal 触发停止流程（不是裸 Stop()）
+    ↓
+取消 serviceCtx，同时并发执行用户 Stop()（由 stopFuncOnce 保证仅一次）
     ↓
 服务内的 Run(ctx) 收到 ctx.Done()，开始优雅退出
     ↓
-Stop() 执行清理；若超时则触发分级超时策略
-    ↓
-RunWait 退出，程序结束
+Run() 返回，RunWait 退出，程序结束
+
+[分支] 若停止请求先于本次运行落地：Run 立即取消 serviceCtx 并返回 nil，
+       完全不执行用户 RunFunc（详见 service-management.md 的"停止意图"一节）
 ```
 
 ## 为什么使用 `func(ctx context.Context) error`？
@@ -111,23 +119,33 @@ func runService() error {
 
 ## 分级超时保护机制
 
-框架默认提供 **15+5 秒分级关闭预算**：
+框架默认提供 **15 + 5 秒分级关闭预算**，但**只在 CLI 前台 `run` 命令路径生效**：
 
 ```
-RunWait 捕获信号 → sm.Stop()
+外部取消 commandCtx（信号 / 父级 ctx 取消）
     ↓
-先取消 Run(ctx)，让主服务开始优雅退出
+等待 ShutdownInitial（默认 15s），给主服务优雅退出的时间
     ↓
-等待 15 秒（主服务退出期）
+[仍在运行] 才触发停止流程：取消 serviceCtx + 执行用户 Stop()
     ↓
-[超时] 执行 stopService() / 最终清理
+等待 ShutdownGrace（默认 5s）完成清理
     ↓
-[超时] 再等待 5 秒（清理期）
-    ↓
-[超时] 后台模式进入 StopTimeout 强制退出保护
+[仍未退出] 记录警告并返回 nil
 ```
 
-这确保真实服务先收到 `ctx.Done()`，有足够时间开始优雅退出；如果仍未结束，再进入最终清理与后台强制退出保护。
+与之**并行**的强制退出保护从首次 Stop 起算，而不是排在分级之后：
+
+```
+首次 Stop → scheduleForceExit(StopTimeout) 启动 20s 倒计时
+    ↓
+Run 正常返回 → cancelForceExit() 撤销
+    ↓
+[20s 到点未撤销] 后台模式强制退出
+```
+
+这确保真实服务先收到 `ctx.Done()`、有足够时间开始优雅退出；仍未结束才进入最终清理与强制退出保护。
+
+> 注意：`ShutdownInitial` / `ShutdownGrace` 显式传 0 **不会禁用**等待，而是回落为 3s + 2s。
 
 ### 自定义超时时间
 
