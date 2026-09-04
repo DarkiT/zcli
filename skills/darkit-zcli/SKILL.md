@@ -79,8 +79,8 @@ user-invocable: false
 
 读 `DESIGN.md`
 
-> 框架自身的审计历史 `resources/design-audit-2026-03.md` 不在本导航内：那是面向 zcli
-> 维护者的内部记录（历史缺陷、重构边界），对基于 zcli 开发应用没有指导价值，已归档。
+> 框架自身的审计历史见 `docs/design-audit-2026-03.md`：那是面向 zcli 维护者的内部
+> 记录（历史缺陷、重构边界），对基于 zcli 开发应用没有指导价值，故不在本导航内。
 
 ## 高信号源码文件
 
